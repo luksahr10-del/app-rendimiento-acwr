@@ -9,7 +9,7 @@ Requisitos previos:
      (la cadena "URI" que copiaste de Supabase → Project Settings → Database)
   2. pip install -r requirements.txt
 
-Corré con:  uvicorn main:app --reload --host 0.0.0.0 --port 8000
+Correr con:  uvicorn main:app --reload --host 0.0.0.0 --port 8000
   - Jugador:    http://<tu-ip>:8000/            (cuenta propia: email + clave)
   - Entrenador: http://<tu-ip>:8000/panel       (cuenta propia; para crearla hace
                 falta el PIN, ver /entrenador/registro)
@@ -59,7 +59,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError(
-        "Falta DATABASE_URL. Creá un archivo .env en esta carpeta con:\n"
+        "Falta DATABASE_URL. Crea un archivo .env en esta carpeta con:\n"
         "    DATABASE_URL=postgresql://usuario:password@host:puerto/postgres"
     )
 
@@ -320,14 +320,14 @@ def registrar(
     if not j:
         return RedirectResponse("/login", status_code=303)
     if not csrf_valido(request, csrf_token):
-        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
+        return HTMLResponse("Sesión expirada. Vuelve a cargar la página e intentá de nuevo.", status_code=403)
 
     try:
         fecha_dt = datetime.strptime(fecha, "%Y-%m-%d").date()
     except ValueError:
         return HTMLResponse("Fecha inválida.", status_code=400)
     if fecha_dt > date.today():
-        return HTMLResponse("No podés cargar una fecha futura.", status_code=400)
+        return HTMLResponse("No puedes cargar una fecha futura.", status_code=400)
 
     # Ajustamos valores fuera de rango en vez de rechazar el envío: un typo
     # (ej. rpe=99) no debería tirarle un error al jugador, se corrige solo.
@@ -379,12 +379,12 @@ def registro(
     password2: str = Form(...),
 ):
     if not csrf_valido(request, csrf_token):
-        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
+        return HTMLResponse("Sesión expirada. Vuelve a cargar la página e intentá de nuevo.", status_code=403)
     nombre = nombre.strip()
     email = email.strip().lower()
     if not nombre or "@" not in email:
         return RedirectResponse(
-            "/registro?error=" + quote("Completá tu nombre y un email válido."), status_code=303
+            "/registro?error=" + quote("Completa tu nombre y un email válido."), status_code=303
         )
     if len(password) < 6:
         return RedirectResponse(
@@ -420,11 +420,11 @@ def login_form(request: Request, error: str = ""):
 @app.post("/login")
 def login(request: Request, csrf_token: str = Form(...), email: str = Form(...), password: str = Form(...)):
     if not csrf_valido(request, csrf_token):
-        return RedirectResponse("/login?error=" + quote("Sesión expirada, probá de nuevo."), status_code=303)
+        return RedirectResponse("/login?error=" + quote("Sesión expirada, prueba de nuevo."), status_code=303)
     email = email.strip().lower()
     if login_bloqueado(request, email):
         return RedirectResponse(
-            "/login?error=" + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            "/login?error=" + quote("Demasiados intentos fallidos. Espera unos minutos y prueba de nuevo."),
             status_code=303,
         )
     with conn() as c:
@@ -465,13 +465,13 @@ def entrenador_registro(
     password2: str = Form(...),
 ):
     if not csrf_valido(request, csrf_token):
-        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
+        return HTMLResponse("Sesión expirada. Vuelve a cargar la página e intentá de nuevo.", status_code=403)
     # El PIN prueba que quien se registra está autorizado por el club a ver
     # los datos de todo el plantel; se rate-limitea igual que un login.
     if login_bloqueado(request, "__entrenador_pin__"):
         return RedirectResponse(
             "/entrenador/registro?error="
-            + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            + quote("Demasiados intentos fallidos. Espera unos minutos y prueba de nuevo."),
             status_code=303,
         )
     if pin != PIN_ENTRENADOR:
@@ -481,7 +481,7 @@ def entrenador_registro(
     email = email.strip().lower()
     if not nombre or "@" not in email:
         return RedirectResponse(
-            "/entrenador/registro?error=" + quote("Completá tu nombre y un email válido."), status_code=303
+            "/entrenador/registro?error=" + quote("Completa tu nombre y un email válido."), status_code=303
         )
     if len(password) < 6:
         return RedirectResponse(
@@ -521,13 +521,13 @@ def entrenador_login(
 ):
     if not csrf_valido(request, csrf_token):
         return RedirectResponse(
-            "/entrenador/login?error=" + quote("Sesión expirada, probá de nuevo."), status_code=303
+            "/entrenador/login?error=" + quote("Sesión expirada, prueba de nuevo."), status_code=303
         )
     email = email.strip().lower()
     if login_bloqueado(request, email):
         return RedirectResponse(
             "/entrenador/login?error="
-            + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            + quote("Demasiados intentos fallidos. Espera unos minutos y prueba de nuevo."),
             status_code=303,
         )
     with conn() as c:
@@ -999,7 +999,7 @@ _ICONO_PERSONA = ('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" s
 
 
 def _boton_cuenta(href, icono, texto, activo):
-    """Botón Registrate/Inicia sesión. Si `activo` (ya estás en esa página),
+    """Botón Regístrate/Inicia sesión. Si `activo` (ya estás en esa página),
     se dibuja como bloque sin link en vez de <a>, para no auto-navegar."""
     tag = "div" if activo else "a"
     href_attr = "" if activo else f' href="{href}"'
@@ -1038,7 +1038,7 @@ PAGINA_LOGIN = f"""<!doctype html>
   <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
-    <p class="sub">Ingresá para cargar tu día</p>
+    <p class="sub">Ingresa para cargar tu día</p>
     {{{{ERROR}}}}
     <form method="post" action="/login">
       <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
@@ -1048,7 +1048,7 @@ PAGINA_LOGIN = f"""<!doctype html>
       <input type="password" id="password" name="password" required>
       <button type="submit">Ingresar</button>
     </form>
-    <p class="alt">¿No tenés cuenta? <a href="/registro">Registrate</a></p>
+    <p class="alt">¿No tienes cuenta? <a href="/registro">Regístrate</a></p>
   </div>
 </body></html>"""
 
@@ -1060,7 +1060,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
   <a href="/" class="volver">‹ Volver</a>
   <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
   <div class="card">
-    <h1>Creá tu cuenta</h1>
+    <h1>Crea tu cuenta</h1>
     <p class="sub">Para registrar tu día a día</p>
     {{{{ERROR}}}}
     <form method="post" action="/registro">
@@ -1083,7 +1083,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
       </div>
       <button type="submit">Crear cuenta</button>
     </form>
-    <p class="alt">¿Ya tenés cuenta? <a href="/login">Ingresá</a></p>
+    <p class="alt">¿Ya tienes cuenta? <a href="/login">Ingresa</a></p>
   </div>
 </body></html>"""
 
@@ -1119,7 +1119,7 @@ PAGINA_BIENVENIDA = f"""<!doctype html>
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">{ESTILO}</head>
 <body><div class="wrap"><header class="top"><div class="bola">🔒</div>
-<div><h1>Administración</h1><p class="sub">Ingresá el PIN</p></div></header>
+<div><h1>Administración</h1><p class="sub">Ingresa el PIN</p></div></header>
 <div class="card"><form action="/admin" method="get">
 <label>PIN</label><input type="password" name="pin" required autofocus>
 <button class="enviar" type="submit">Entrar</button></form></div></div></body></html>"""
@@ -1131,7 +1131,7 @@ PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
 <body>
   <div class="card">
     <h1>Panel del cuerpo técnico</h1>
-    <p class="sub">Ingresá con tu cuenta</p>
+    <p class="sub">Ingresa con tu cuenta</p>
     {{{{ERROR}}}}
     <form method="post" action="/entrenador/login">
       <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
@@ -1141,7 +1141,7 @@ PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
       <input type="password" id="password" name="password" required>
       <button type="submit">Ingresar</button>
     </form>
-    <p class="alt">¿No tenés cuenta? <a href="/entrenador/registro">Registrate con el PIN del club</a></p>
+    <p class="alt">¿No tienes cuenta? <a href="/entrenador/registro">Regístrate con el PIN del club</a></p>
   </div>
 </body></html>"""
 
@@ -1152,7 +1152,7 @@ PAGINA_ENTRENADOR_REGISTRO = f"""<!doctype html>
 <body>
   <div class="card">
     <h1>Crear cuenta de entrenador</h1>
-    <p class="sub">Necesitás el PIN del club para registrarte</p>
+    <p class="sub">Necesitas el PIN del club para registrarte</p>
     {{{{ERROR}}}}
     <form method="post" action="/entrenador/registro">
       <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
@@ -1174,7 +1174,7 @@ PAGINA_ENTRENADOR_REGISTRO = f"""<!doctype html>
       </div>
       <button type="submit">Crear cuenta</button>
     </form>
-    <p class="alt">¿Ya tenés cuenta? <a href="/entrenador/login">Ingresá</a></p>
+    <p class="alt">¿Ya tienes cuenta? <a href="/entrenador/login">Ingresa</a></p>
   </div>
 </body></html>"""
 
@@ -1373,7 +1373,7 @@ document.getElementById('btnAdd').onclick=function(){{
   const nombre=document.getElementById('nombre').value;
   const posicion=document.getElementById('posicion').value;
   const msg=document.getElementById('msg');
-  if(!nombre.trim()){{ msg.textContent='Poné un nombre.'; return; }}
+  if(!nombre.trim()){{ msg.textContent='Ingresa un nombre.'; return; }}
   const fd=new FormData(); fd.append('pin',pin); fd.append('nombre',nombre); fd.append('posicion',posicion);
   fetch('/admin/agregar',{{method:'POST',body:fd}}).then(r=>r.json()).then(res=>{{
     if(res.error){{ msg.textContent=res.error; return; }}
