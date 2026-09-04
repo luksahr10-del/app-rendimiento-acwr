@@ -953,31 +953,24 @@ _ESTILO_CUENTA = """
   .alt a{color:#214EE0;font-weight:600;text-decoration:none}
 </style>"""
 
-# Variante de _ESTILO_CUENTA para las pantallas de jugador (bienvenida/login/
-# registro): arriba va la imagen de marca completa (sin recortar) + los
-# botones Registrate/Inicia sesión + redes, y debajo la tarjeta blanca con el
-# formulario. El entrenador sigue con _ESTILO_CUENTA (fondo azul liso).
+# Variante de _ESTILO_CUENTA para las pantallas de jugador. Login y registro
+# son su propia pantalla (fondo oscuro + marca chica + tarjeta), separada de
+# la bienvenida (que tiene la imagen grande + los botones). El entrenador
+# sigue con _ESTILO_CUENTA (fondo azul liso).
 _ESTILO_CUENTA_JUGADOR = """
 <style>
   *{box-sizing:border-box}
-  body{margin:0;font-family:"Inter",system-ui,sans-serif;background:#05081f;min-height:100vh;
-    display:flex;flex-direction:column;align-items:center;padding:0 0 32px;-webkit-font-smoothing:antialiased}
-  .hero{width:100%;max-width:460px}
-  .hero img{width:100%;display:block}
-  .botones{position:relative;z-index:2;width:100%;max-width:380px;margin:-16% auto 0;
-    padding:0 28px;display:flex;flex-direction:column;gap:14px}
-  .btn{display:flex;align-items:center;width:100%;padding:15px 22px;border-radius:999px;
-    background:linear-gradient(135deg,#4266e0,#1c3fc4);color:#fff;text-decoration:none;
-    font-family:"Saira";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
-    border:1px solid rgba(255,255,255,.15);cursor:pointer}
-  .btn.activo{background:rgba(255,255,255,.12);box-shadow:none;color:#cfd7ff}
-  .btn .icono{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.18);
-    display:grid;place-items:center;flex:none}
-  .btn span.txt{flex:1;text-align:center;margin-right:32px}
-  .redes{position:relative;z-index:2;display:flex;gap:16px;margin:22px 0 30px}
-  .redes a{color:#aab4e8;display:grid;place-items:center;width:36px;height:36px;
-    border-radius:50%;border:1px solid rgba(170,180,232,.35)}
-  .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:calc(100% - 56px);
+  body{margin:0;font-family:"Inter",system-ui,sans-serif;
+    background:radial-gradient(ellipse at 50% 0%, #2c3a86 0%, #10173f 45%, #05081f 100%);
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:24px;-webkit-font-smoothing:antialiased}
+  .volver{align-self:flex-start;color:#aab4e8;text-decoration:none;font-size:.85rem;
+    font-weight:600;margin:0 0 18px 4px}
+  .marca{font-family:"Saira";font-weight:800;font-size:1.35rem;letter-spacing:.03em;color:#fff;
+    text-align:center;margin:0 0 22px}
+  .marca small{display:block;font-weight:600;font-size:.68rem;letter-spacing:.2em;color:#9aa6e8;
+    text-transform:uppercase;margin-top:5px}
+  .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:100%;
     box-shadow:0 20px 50px rgba(5,8,31,.5)}
   h1{font-family:"Saira";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
   p.sub{color:#6B7280;font-size:.9rem;margin:0 0 22px}
@@ -988,7 +981,8 @@ _ESTILO_CUENTA_JUGADOR = """
   button{width:100%;padding:14px;border:0;border-radius:12px;background:#214EE0;color:#fff;
     font-family:"Saira";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
   .error{background:#fde8e2;color:#c0402a;padding:10px 12px;border-radius:10px;font-size:.85rem;margin:0 0 8px}
-  .alt{display:none}
+  .alt{text-align:center;margin-top:18px;font-size:.88rem;color:#6B7280}
+  .alt a{color:#214EE0;font-weight:600;text-decoration:none}
 </style>"""
 
 _HEAD_FUENTES = """
@@ -1040,7 +1034,8 @@ PAGINA_LOGIN = f"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Río Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
-  {bloque_hero("login")}
+  <a href="/" class="volver">‹ Volver</a>
+  <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
     <p class="sub">Ingresá para cargar tu día</p>
@@ -1062,7 +1057,8 @@ PAGINA_REGISTRO = f"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Río Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
-  {bloque_hero("registro")}
+  <a href="/" class="volver">‹ Volver</a>
+  <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
   <div class="card">
     <h1>Creá tu cuenta</h1>
     <p class="sub">Para registrar tu día a día</p>
