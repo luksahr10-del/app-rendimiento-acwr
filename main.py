@@ -32,6 +32,8 @@ import html
 import io
 import os
 import secrets
+import time
+from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -121,6 +123,48 @@ def generar_csrf(request: Request) -> str:
 
 def csrf_valido(request: Request, token: str) -> bool:
     return secrets.compare_digest(request.session.get("csrf", ""), token or "")
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting de /login: en memoria, alcanza para una sola instancia como
+# la que corre esta app en Render. Si algún día hay más de un worker/dyno,
+# esto habría que moverlo a algo compartido (ej. Redis).
+# ---------------------------------------------------------------------------
+LOGIN_MAX_INTENTOS_IP = 15      # por IP: cubre una red compartida (gimnasio, wifi del club)
+LOGIN_MAX_INTENTOS_EMAIL = 5    # por cuenta: más estricto, es un solo jugador
+LOGIN_VENTANA_SEG = 5 * 60
+
+_intentos_por_ip = defaultdict(list)
+_intentos_por_email = defaultdict(list)
+
+
+def _ip_cliente(request: Request) -> str:
+    return request.client.host if request.client else "desconocido"
+
+
+def _contar_recientes(bucket: dict, key: str) -> int:
+    ahora = time.time()
+    intentos = bucket[key]
+    intentos[:] = [t for t in intentos if ahora - t < LOGIN_VENTANA_SEG]
+    return len(intentos)
+
+
+def login_bloqueado(request: Request, email: str) -> bool:
+    return (
+        _contar_recientes(_intentos_por_ip, _ip_cliente(request)) >= LOGIN_MAX_INTENTOS_IP
+        or _contar_recientes(_intentos_por_email, email) >= LOGIN_MAX_INTENTOS_EMAIL
+    )
+
+
+def registrar_intento_fallido(request: Request, email: str):
+    ahora = time.time()
+    _intentos_por_ip[_ip_cliente(request)].append(ahora)
+    _intentos_por_email[email].append(ahora)
+
+
+def limpiar_intentos(request: Request, email: str):
+    _intentos_por_ip.pop(_ip_cliente(request), None)
+    _intentos_por_email.pop(email, None)
 
 
 # ===========================================================================
@@ -357,10 +401,17 @@ def login(request: Request, csrf_token: str = Form(...), email: str = Form(...),
     if not csrf_valido(request, csrf_token):
         return RedirectResponse("/login?error=" + quote("Sesión expirada, probá de nuevo."), status_code=303)
     email = email.strip().lower()
+    if login_bloqueado(request, email):
+        return RedirectResponse(
+            "/login?error=" + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            status_code=303,
+        )
     with conn() as c:
         j = c.execute("SELECT * FROM jugadores WHERE email=%s AND activo=1", (email,)).fetchone()
     if not j or not j["password_hash"] or not check_password(password, j["password_hash"]):
+        registrar_intento_fallido(request, email)
         return RedirectResponse("/login?error=" + quote("Email o contraseña incorrectos."), status_code=303)
+    limpiar_intentos(request, email)
     request.session["jugador_id"] = j["id"]
     return RedirectResponse("/", status_code=303)
 
