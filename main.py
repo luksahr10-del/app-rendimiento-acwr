@@ -28,19 +28,25 @@ QUÉ CAMBIÓ RESPECTO A SQLITE (para que entiendas la migración):
 """
 
 import csv
+import html
 import io
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote
 
+import bcrypt
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+
+from metrics import acwr_de, carga, readiness
 
 # ---------------------------------------------------------------------------
 # Configuración: credenciales desde .env (NUNCA en el código)
@@ -55,6 +61,14 @@ if not DATABASE_URL:
 
 PIN_ENTRENADOR = os.getenv("PIN_ENTRENADOR", "1234")  # también puede ir en el .env
 
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "Falta SECRET_KEY (firma las cookies de sesión de los jugadores).\n"
+        "Generá una y agregala al .env, por ejemplo con:\n"
+        '    python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+
 # Pool de conexiones. prepare_threshold=None desactiva los "prepared statements",
 # necesario para ser compatible con el pooler de Supabase (modo transacción).
 pool = ConnectionPool(
@@ -67,6 +81,7 @@ pool = ConnectionPool(
 pool.open()
 
 app = FastAPI(title="Monitoreo Rendimiento")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
 
 # Carpeta para archivos estáticos (el escudo del club va acá como escudo.png).
 # Se crea sola si no existe, así el montaje nunca falla al arrancar.
@@ -78,6 +93,14 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def conn():
     """Pide una conexión prestada al pool. Se devuelve sola al salir del `with`."""
     return pool.connection()
+
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+
+def check_password(pw: str, hashed: str) -> bool:
+    return bcrypt.checkpw(pw.encode(), hashed.encode())
 
 
 # ===========================================================================
@@ -93,6 +116,9 @@ def init_db():
                 activo INTEGER NOT NULL DEFAULT 1
             )
         """)
+        # Cuenta propia por jugador: email + contraseña (hash bcrypt).
+        c.execute("ALTER TABLE jugadores ADD COLUMN IF NOT EXISTS email TEXT UNIQUE")
+        c.execute("ALTER TABLE jugadores ADD COLUMN IF NOT EXISTS password_hash TEXT")
         c.execute("""
             CREATE TABLE IF NOT EXISTS registros (
                 id SERIAL PRIMARY KEY,
@@ -110,47 +136,25 @@ def init_db():
                 UNIQUE (jugador_id, fecha)
             )
         """)
-        n = c.execute("SELECT COUNT(*) AS n FROM jugadores").fetchone()["n"]
-        if n == 0:
-            for nombre, pos in [("Juan Pérez", "Base"), ("Marcos Díaz", "Alero"),
-                                ("Lucas Romero", "Pívot")]:
-                c.execute("INSERT INTO jugadores (nombre, posicion) VALUES (%s,%s)",
-                          (nombre, pos))
 
 
 init_db()
 
 
-# ===========================================================================
-#  MÉTRICAS (ciencias del deporte)
-# ===========================================================================
-def carga(rpe, minutos):
-    """Carga de la sesión = RPE x minutos (session-RPE, estándar del rubro)."""
-    return (rpe or 0) * (minutos or 0)
-
-
-def readiness(sueno, fatiga, molestias):
-    """Índice de disponibilidad 0-100: mezcla sueño, fatiga y molestias."""
-    s = min((sueno or 0) / 8.0, 1.0)
-    f = (5 - (fatiga or 3)) / 4.0
-    m = 0.5 if (molestias or "").strip() else 1.0
-    return round(100 * (0.4 * s + 0.4 * f + 0.2 * m))
-
-
-def acwr_de(cargas_por_fecha, hasta):
-    """ACWR = carga aguda (prom. 7 días) / crónica (prom. 28 días).
-    Zona ideal 0.8-1.3; > 1.5 = riesgo de lesión elevado."""
-    def prom(dias):
-        ini = hasta - timedelta(days=dias - 1)
-        total = sum(v for f, v in cargas_por_fecha.items()
-                    if ini.isoformat() <= f <= hasta.isoformat())
-        return total / dias
-    cronica = prom(28)
-    if cronica == 0:
+def jugador_logueado(request: Request):
+    """Devuelve la fila del jugador logueado según la cookie de sesión, o None."""
+    jid = request.session.get("jugador_id")
+    if not jid:
         return None
-    return round(prom(7) / cronica, 2)
+    with conn() as c:
+        return c.execute(
+            "SELECT * FROM jugadores WHERE id=%s AND activo=1", (jid,)
+        ).fetchone()
 
 
+# ===========================================================================
+#  MÉTRICAS (ciencias del deporte) — ver metrics.py (carga, readiness, acwr_de)
+# ===========================================================================
 def datos_jugador(jid):
     """Junta registros + métricas derivadas de un jugador."""
     with conn() as c:
@@ -200,18 +204,20 @@ def datos_jugador(jid):
 #  RUTAS — JUGADOR
 # ===========================================================================
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def formulario():
-    with conn() as c:
-        jugadores = c.execute(
-            "SELECT id, nombre FROM jugadores WHERE activo=1 ORDER BY nombre"
-        ).fetchall()
-    opciones = "".join(f'<option value="{j["id"]}">{j["nombre"]}</option>' for j in jugadores)
-    return PAGINA_JUGADOR.replace("{{OPCIONES}}", opciones).replace("{{HOY}}", date.today().isoformat())
+def formulario(request: Request):
+    if request.method == "HEAD":
+        return HTMLResponse("")
+    j = jugador_logueado(request)
+    if not j:
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(
+        PAGINA_JUGADOR.replace("{{NOMBRE}}", j["nombre"]).replace("{{HOY}}", date.today().isoformat())
+    )
 
 
 @app.post("/registrar")
 def registrar(
-    jugador_id: int = Form(...),
+    request: Request,
     fecha: str = Form(...),
     entreno: int = Form(...),
     rpe: int = Form(0),
@@ -222,6 +228,9 @@ def registrar(
     rutina_ok: int = Form(0),
     molestias: str = Form(""),
 ):
+    j = jugador_logueado(request)
+    if not j:
+        return RedirectResponse("/login", status_code=303)
     with conn() as c:
         # Upsert: un registro por jugador por día (si repite, actualiza)
         c.execute(
@@ -234,11 +243,81 @@ def registrar(
                  fatiga=EXCLUDED.fatiga, sueno=EXCLUDED.sueno, comida=EXCLUDED.comida,
                  rutina_ok=EXCLUDED.rutina_ok, molestias=EXCLUDED.molestias,
                  creado=EXCLUDED.creado""",
-            (jugador_id, fecha, entreno, rpe, minutos, fatiga, sueno, comida,
+            (j["id"], fecha, entreno, rpe, minutos, fatiga, sueno, comida,
              rutina_ok, molestias, datetime.now().isoformat(timespec="seconds")),
         )
     r = readiness(sueno, fatiga, molestias)
     return HTMLResponse(PAGINA_OK.replace("{{READY}}", str(r)))
+
+
+# ===========================================================================
+#  RUTAS — CUENTA DEL JUGADOR (registro / login / logout)
+# ===========================================================================
+@app.get("/registro", response_class=HTMLResponse)
+def registro_form(error: str = ""):
+    msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(PAGINA_REGISTRO.replace("{{ERROR}}", msg))
+
+
+@app.post("/registro")
+def registro(
+    request: Request,
+    nombre: str = Form(...),
+    posicion: str = Form(""),
+    email: str = Form(...),
+    password: str = Form(...),
+    password2: str = Form(...),
+):
+    nombre = nombre.strip()
+    email = email.strip().lower()
+    if not nombre or "@" not in email:
+        return RedirectResponse(
+            "/registro?error=" + quote("Completá tu nombre y un email válido."), status_code=303
+        )
+    if len(password) < 6:
+        return RedirectResponse(
+            "/registro?error=" + quote("La contraseña debe tener al menos 6 caracteres."), status_code=303
+        )
+    if password != password2:
+        return RedirectResponse(
+            "/registro?error=" + quote("Las contraseñas no coinciden."), status_code=303
+        )
+    try:
+        with conn() as c:
+            fila = c.execute(
+                """INSERT INTO jugadores (nombre, posicion, email, password_hash)
+                   VALUES (%s,%s,%s,%s) RETURNING id""",
+                (nombre, posicion.strip(), email, hash_password(password)),
+            ).fetchone()
+    except psycopg.errors.UniqueViolation:
+        return RedirectResponse(
+            "/registro?error=" + quote("Ya existe una cuenta con ese nombre o email."), status_code=303
+        )
+    request.session["jugador_id"] = fila["id"]
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(error: str = ""):
+    msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(PAGINA_LOGIN.replace("{{ERROR}}", msg))
+
+
+@app.post("/login")
+def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    email = email.strip().lower()
+    with conn() as c:
+        j = c.execute("SELECT * FROM jugadores WHERE email=%s AND activo=1", (email,)).fetchone()
+    if not j or not j["password_hash"] or not check_password(password, j["password_hash"]):
+        return RedirectResponse("/login?error=" + quote("Email o contraseña incorrectos."), status_code=303)
+    request.session["jugador_id"] = j["id"]
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
 
 
 # ===========================================================================
@@ -461,6 +540,8 @@ PAGINA_JUGADOR = """<!doctype html>
   .escudo .mono{font-family:"Saira";font-weight:800;font-size:24px;color:#fff}
   .wordmark{font-family:"Saira";font-weight:800;font-size:26px;letter-spacing:.06em;line-height:1}
   .wordmark small{display:block;font-weight:500;font-size:11px;letter-spacing:.18em;opacity:.7;margin-top:3px}
+  .salir{margin-left:auto;color:#fff;opacity:.85;font-size:.78rem;font-weight:600;text-decoration:none;
+    border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:6px 12px;flex:none}
   .hero h1{font-family:"Saira";font-weight:700;font-size:34px;line-height:1;margin:20px 0 4px}
   .hero .fecha{font-size:13px;opacity:.85;margin:0 0 20px;text-transform:capitalize}
   .cancha{height:26px;border-top:2px solid rgba(255,255,255,.35);position:relative;margin:0 -20px}
@@ -513,20 +594,14 @@ PAGINA_JUGADOR = """<!doctype html>
         <span class="mono" style="display:none">C</span>
       </div>
       <div class="wordmark">COREY<small>RENDIMIENTO</small></div>
+      <a href="/logout" class="salir">Salir</a>
     </div>
-    <h1>Mi día</h1>
+    <h1>Hola, {{NOMBRE}}</h1>
     <p class="fecha" id="fecha">—</p>
     <div class="cancha"></div>
   </header>
   <main class="hoja">
     <form action="/registrar" method="post">
-      <div class="campo">
-        <label for="jugador">Jugador</label>
-        <select id="jugador" name="jugador_id" required>
-          <option value="" disabled selected>Elegí tu nombre</option>
-          {{OPCIONES}}
-        </select>
-      </div>
       <div class="campo">
         <label for="fechaIn">Fecha</label>
         <input type="date" id="fechaIn" name="fecha" value="{{HOY}}" required>
@@ -627,6 +702,83 @@ PAGINA_OK = """<!doctype html>
   <h2>¡Día guardado!</h2>
   <p class="disp">Tu disponibilidad de hoy: {{READY}}/100</p>
   <a href="/">Cargar otro</a>
+</body></html>"""
+
+_ESTILO_CUENTA = """
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Inter",system-ui,sans-serif;background:#214EE0;min-height:100vh;
+    display:flex;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased}
+  .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:100%;
+    box-shadow:0 20px 50px rgba(17,19,24,.25)}
+  h1{font-family:"Saira";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
+  p.sub{color:#6B7280;font-size:.9rem;margin:0 0 22px}
+  label{display:block;font-weight:600;font-size:.88rem;margin:14px 0 6px;color:#111318}
+  input{width:100%;padding:12px;border:1.5px solid #E6E8EE;border-radius:10px;font-size:1rem;font-family:inherit}
+  input:focus{outline:none;border-color:#214EE0;box-shadow:0 0 0 4px #EDF1FE}
+  .par{display:flex;gap:10px}.par>div{flex:1}
+  button{width:100%;padding:14px;border:0;border-radius:12px;background:#214EE0;color:#fff;
+    font-family:"Saira";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
+  .error{background:#fde8e2;color:#c0402a;padding:10px 12px;border-radius:10px;font-size:.85rem;margin:0 0 8px}
+  .alt{text-align:center;margin-top:18px;font-size:.88rem;color:#6B7280}
+  .alt a{color:#214EE0;font-weight:600;text-decoration:none}
+</style>"""
+
+_HEAD_FUENTES = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">"""
+
+PAGINA_LOGIN = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<body>
+  <div class="card">
+    <h1>Bienvenido de vuelta</h1>
+    <p class="sub">Ingresá para cargar tu día</p>
+    {{{{ERROR}}}}
+    <form method="post" action="/login">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autofocus>
+      <label for="password">Contraseña</label>
+      <input type="password" id="password" name="password" required>
+      <button type="submit">Ingresar</button>
+    </form>
+    <p class="alt">¿No tenés cuenta? <a href="/registro">Registrate</a></p>
+  </div>
+</body></html>"""
+
+PAGINA_REGISTRO = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<body>
+  <div class="card">
+    <h1>Creá tu cuenta</h1>
+    <p class="sub">Para registrar tu día a día</p>
+    {{{{ERROR}}}}
+    <form method="post" action="/registro">
+      <label for="nombre">Nombre y apellido</label>
+      <input type="text" id="nombre" name="nombre" required autofocus>
+      <label for="posicion">Posición (opcional)</label>
+      <input type="text" id="posicion" name="posicion" placeholder="Base, Escolta, Alero…">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required>
+      <div class="par">
+        <div>
+          <label for="password">Contraseña</label>
+          <input type="password" id="password" name="password" minlength="6" required>
+        </div>
+        <div>
+          <label for="password2">Repetir</label>
+          <input type="password" id="password2" name="password2" minlength="6" required>
+        </div>
+      </div>
+      <button type="submit">Crear cuenta</button>
+    </form>
+    <p class="alt">¿Ya tenés cuenta? <a href="/login">Ingresá</a></p>
+  </div>
 </body></html>"""
 
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
