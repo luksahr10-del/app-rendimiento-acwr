@@ -10,9 +10,10 @@ Requisitos previos:
   2. pip install -r requirements.txt
 
 Corré con:  uvicorn main:app --reload --host 0.0.0.0 --port 8000
-  - Jugador:    http://<tu-ip>:8000/
-  - Entrenador: http://<tu-ip>:8000/panel     (PIN por defecto: 1234)
-  - Admin:      http://<tu-ip>:8000/admin      (mismo PIN)
+  - Jugador:    http://<tu-ip>:8000/            (cuenta propia: email + clave)
+  - Entrenador: http://<tu-ip>:8000/panel       (cuenta propia; para crearla hace
+                falta el PIN, ver /entrenador/registro)
+  - Admin:      http://<tu-ip>:8000/admin       (PIN, por defecto 1234)
 
 ------------------------------------------------------------------------------
 QUÉ CAMBIÓ RESPECTO A SQLITE (para que entiendas la migración):
@@ -183,6 +184,17 @@ def init_db():
         # Cuenta propia por jugador: email + contraseña (hash bcrypt).
         c.execute("ALTER TABLE jugadores ADD COLUMN IF NOT EXISTS email TEXT UNIQUE")
         c.execute("ALTER TABLE jugadores ADD COLUMN IF NOT EXISTS password_hash TEXT")
+        # Cuenta propia por entrenador. Para crearla hace falta el PIN (ver
+        # /entrenador/registro): es la forma de que no cualquiera se anote
+        # como cuerpo técnico y vea los datos de salud de todo el plantel.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS entrenadores (
+                id SERIAL PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL
+            )
+        """)
         c.execute("""
             CREATE TABLE IF NOT EXISTS registros (
                 id SERIAL PRIMARY KEY,
@@ -214,6 +226,15 @@ def jugador_logueado(request: Request):
         return c.execute(
             "SELECT * FROM jugadores WHERE id=%s AND activo=1", (jid,)
         ).fetchone()
+
+
+def entrenador_logueado(request: Request):
+    """Devuelve la fila del entrenador logueado según la cookie de sesión, o None."""
+    eid = request.session.get("entrenador_id")
+    if not eid:
+        return None
+    with conn() as c:
+        return c.execute("SELECT * FROM entrenadores WHERE id=%s", (eid,)).fetchone()
 
 
 # ===========================================================================
@@ -423,26 +444,131 @@ def logout(request: Request):
 
 
 # ===========================================================================
+#  RUTAS — CUENTA DEL ENTRENADOR (registro / login / logout)
+# ===========================================================================
+@app.get("/entrenador/registro", response_class=HTMLResponse)
+def entrenador_registro_form(request: Request, error: str = ""):
+    msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(
+        PAGINA_ENTRENADOR_REGISTRO.replace("{{ERROR}}", msg).replace("{{CSRF}}", generar_csrf(request))
+    )
+
+
+@app.post("/entrenador/registro")
+def entrenador_registro(
+    request: Request,
+    csrf_token: str = Form(...),
+    pin: str = Form(...),
+    nombre: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    password2: str = Form(...),
+):
+    if not csrf_valido(request, csrf_token):
+        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
+    # El PIN prueba que quien se registra está autorizado por el club a ver
+    # los datos de todo el plantel; se rate-limitea igual que un login.
+    if login_bloqueado(request, "__entrenador_pin__"):
+        return RedirectResponse(
+            "/entrenador/registro?error="
+            + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            status_code=303,
+        )
+    if pin != PIN_ENTRENADOR:
+        registrar_intento_fallido(request, "__entrenador_pin__")
+        return RedirectResponse("/entrenador/registro?error=" + quote("PIN inválido."), status_code=303)
+    nombre = nombre.strip()
+    email = email.strip().lower()
+    if not nombre or "@" not in email:
+        return RedirectResponse(
+            "/entrenador/registro?error=" + quote("Completá tu nombre y un email válido."), status_code=303
+        )
+    if len(password) < 6:
+        return RedirectResponse(
+            "/entrenador/registro?error=" + quote("La contraseña debe tener al menos 6 caracteres."),
+            status_code=303,
+        )
+    if password != password2:
+        return RedirectResponse(
+            "/entrenador/registro?error=" + quote("Las contraseñas no coinciden."), status_code=303
+        )
+    try:
+        with conn() as c:
+            fila = c.execute(
+                "INSERT INTO entrenadores (nombre, email, password_hash) VALUES (%s,%s,%s) RETURNING id",
+                (nombre, email, hash_password(password)),
+            ).fetchone()
+    except psycopg.errors.UniqueViolation:
+        return RedirectResponse(
+            "/entrenador/registro?error=" + quote("Ya existe una cuenta con ese email."), status_code=303
+        )
+    limpiar_intentos(request, "__entrenador_pin__")
+    request.session["entrenador_id"] = fila["id"]
+    return RedirectResponse("/panel", status_code=303)
+
+
+@app.get("/entrenador/login", response_class=HTMLResponse)
+def entrenador_login_form(request: Request, error: str = ""):
+    msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(
+        PAGINA_ENTRENADOR_LOGIN.replace("{{ERROR}}", msg).replace("{{CSRF}}", generar_csrf(request))
+    )
+
+
+@app.post("/entrenador/login")
+def entrenador_login(
+    request: Request, csrf_token: str = Form(...), email: str = Form(...), password: str = Form(...)
+):
+    if not csrf_valido(request, csrf_token):
+        return RedirectResponse(
+            "/entrenador/login?error=" + quote("Sesión expirada, probá de nuevo."), status_code=303
+        )
+    email = email.strip().lower()
+    if login_bloqueado(request, email):
+        return RedirectResponse(
+            "/entrenador/login?error="
+            + quote("Demasiados intentos fallidos. Esperá unos minutos y probá de nuevo."),
+            status_code=303,
+        )
+    with conn() as c:
+        e = c.execute("SELECT * FROM entrenadores WHERE email=%s", (email,)).fetchone()
+    if not e or not check_password(password, e["password_hash"]):
+        registrar_intento_fallido(request, email)
+        return RedirectResponse(
+            "/entrenador/login?error=" + quote("Email o contraseña incorrectos."), status_code=303
+        )
+    limpiar_intentos(request, email)
+    request.session["entrenador_id"] = e["id"]
+    return RedirectResponse("/panel", status_code=303)
+
+
+@app.get("/entrenador/logout")
+def entrenador_logout(request: Request):
+    request.session.pop("entrenador_id", None)
+    return RedirectResponse("/entrenador/login", status_code=303)
+
+
+# ===========================================================================
 #  RUTAS — ENTRENADOR / PANEL
 # ===========================================================================
 @app.get("/panel", response_class=HTMLResponse)
-def panel(pin: str = ""):
-    if pin != PIN_ENTRENADOR:
-        return HTMLResponse(PAGINA_PIN)
-    return PAGINA_PANEL
+def panel(request: Request):
+    if not entrenador_logueado(request):
+        return RedirectResponse("/entrenador/login", status_code=303)
+    return HTMLResponse(PAGINA_PANEL)
 
 
 @app.get("/jugador/{jid}", response_class=HTMLResponse)
-def ficha(jid: int, pin: str = ""):
-    if pin != PIN_ENTRENADOR:
-        return HTMLResponse(PAGINA_PIN)
-    return PAGINA_FICHA
+def ficha(jid: int, request: Request):
+    if not entrenador_logueado(request):
+        return RedirectResponse("/entrenador/login", status_code=303)
+    return HTMLResponse(PAGINA_FICHA)
 
 
 @app.get("/api/datos")
-def api_datos(pin: str = ""):
-    if pin != PIN_ENTRENADOR:
-        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+def api_datos(request: Request):
+    if not entrenador_logueado(request):
+        return JSONResponse({"error": "No autenticado"}, status_code=403)
     with conn() as c:
         jugadores = c.execute("SELECT * FROM jugadores ORDER BY nombre").fetchall()
     resumen = []
@@ -466,9 +592,9 @@ def api_datos(pin: str = ""):
 
 
 @app.get("/api/jugador/{jid}")
-def api_jugador(jid: int, pin: str = ""):
-    if pin != PIN_ENTRENADOR:
-        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+def api_jugador(jid: int, request: Request):
+    if not entrenador_logueado(request):
+        return JSONResponse({"error": "No autenticado"}, status_code=403)
     d = datos_jugador(jid)
     if not d:
         return JSONResponse({"error": "No existe"}, status_code=404)
@@ -476,9 +602,9 @@ def api_jugador(jid: int, pin: str = ""):
 
 
 @app.get("/api/export.csv")
-def export_csv(pin: str = ""):
-    if pin != PIN_ENTRENADOR:
-        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+def export_csv(request: Request):
+    if not entrenador_logueado(request):
+        return JSONResponse({"error": "No autenticado"}, status_code=403)
     with conn() as c:
         filas = c.execute("""
             SELECT j.nombre, j.posicion, r.*
@@ -889,10 +1015,64 @@ PAGINA_REGISTRO = f"""<!doctype html>
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">{ESTILO}</head>
 <body><div class="wrap"><header class="top"><div class="bola">🔒</div>
-<div><h1>Acceso cuerpo técnico</h1><p class="sub">Ingresá el PIN</p></div></header>
-<div class="card"><form action="/panel" method="get">
+<div><h1>Administración</h1><p class="sub">Ingresá el PIN</p></div></header>
+<div class="card"><form action="/admin" method="get">
 <label>PIN</label><input type="password" name="pin" required autofocus>
 <button class="enviar" type="submit">Entrar</button></form></div></div></body></html>"""
+
+PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<body>
+  <div class="card">
+    <h1>Panel del cuerpo técnico</h1>
+    <p class="sub">Ingresá con tu cuenta</p>
+    {{{{ERROR}}}}
+    <form method="post" action="/entrenador/login">
+      <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autofocus>
+      <label for="password">Contraseña</label>
+      <input type="password" id="password" name="password" required>
+      <button type="submit">Ingresar</button>
+    </form>
+    <p class="alt">¿No tenés cuenta? <a href="/entrenador/registro">Registrate con el PIN del club</a></p>
+  </div>
+</body></html>"""
+
+PAGINA_ENTRENADOR_REGISTRO = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<body>
+  <div class="card">
+    <h1>Crear cuenta de entrenador</h1>
+    <p class="sub">Necesitás el PIN del club para registrarte</p>
+    {{{{ERROR}}}}
+    <form method="post" action="/entrenador/registro">
+      <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
+      <label for="pin">PIN del club</label>
+      <input type="password" id="pin" name="pin" required autofocus>
+      <label for="nombre">Nombre y apellido</label>
+      <input type="text" id="nombre" name="nombre" required>
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required>
+      <div class="par">
+        <div>
+          <label for="password">Contraseña</label>
+          <input type="password" id="password" name="password" minlength="6" required>
+        </div>
+        <div>
+          <label for="password2">Repetir</label>
+          <input type="password" id="password2" name="password2" minlength="6" required>
+        </div>
+      </div>
+      <button type="submit">Crear cuenta</button>
+    </form>
+    <p class="alt">¿Ya tenés cuenta? <a href="/entrenador/login">Ingresá</a></p>
+  </div>
+</body></html>"""
 
 PAGINA_PANEL = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -912,11 +1092,10 @@ Disponibilidad = índice 0-100 (sueño+fatiga+molestias). ACWR = carga aguda/cr�
 ideal 0.8-1.3, riesgo &gt;1.5. Tocá un jugador para ver su ficha.</p>
 </div>
 <script>
-const pin = new URLSearchParams(location.search).get('pin');
-const P = encodeURIComponent(pin);
 document.getElementById('nav').innerHTML =
-  `<a href="/admin?pin=${{P}}">⚙️ Gestionar jugadores</a>
-   <a href="/api/export.csv?pin=${{P}}">⬇️ Exportar CSV</a>`;
+  `<a href="/admin">⚙️ Gestionar jugadores</a>
+   <a href="/api/export.csv">⬇️ Exportar CSV</a>
+   <a href="/entrenador/logout">Salir</a>`;
 
 function acwrBadge(a){{
   if(a===null||a===undefined) return '<span class="badge b-gris">—</span>';
@@ -929,7 +1108,10 @@ function readyBadge(r){{
   return `<span class="badge ${{cls}}">${{r}}</span>`;
 }}
 
-fetch('/api/datos?pin='+P).then(r=>r.json()).then(d=>{{
+fetch('/api/datos').then(r=>{{
+  if(r.status===403){{ location.href='/entrenador/login'; throw new Error('no autenticado'); }}
+  return r.json();
+}}).then(d=>{{
   const js = d.jugadores||[];
   const tb = document.querySelector('#tabla tbody');
   let cargaHoy=0, enRiesgo=0, dispBaja=0, alertasHTML='';
@@ -946,7 +1128,7 @@ fetch('/api/datos?pin='+P).then(r=>r.json()).then(d=>{{
       <td>${{j.carga_hoy||'—'}}</td>
       <td>${{j.ultimo||'—'}}</td>
       <td>${{j.activo?'<span class="badge b-ok">activo</span>':'<span class="badge b-gris">baja</span>'}}</td>
-      <td><a href="/jugador/${{j.id}}?pin=${{P}}">Ver ficha →</a></td>`;
+      <td><a href="/jugador/${{j.id}}">Ver ficha →</a></td>`;
     tb.appendChild(tr);
   }});
   document.getElementById('alertas').innerHTML = alertasHTML;
@@ -955,7 +1137,7 @@ fetch('/api/datos?pin='+P).then(r=>r.json()).then(d=>{{
     <div class="kpi"><div class="n">${{cargaHoy}}</div><div class="l">Carga total hoy</div></div>
     <div class="kpi"><div class="n">${{enRiesgo}}</div><div class="l">ACWR en riesgo</div></div>
     <div class="kpi"><div class="n">${{dispBaja}}</div><div class="l">Disponibilidad baja</div></div>`;
-}}).catch(()=>{{document.body.innerHTML='<div class="wrap"><p>Error: PIN inválido o servidor caído.</p></div>'}});
+}}).catch(()=>{{document.body.innerHTML='<div class="wrap"><p>Error: no se pudo cargar el panel.</p></div>'}});
 </script></body></html>"""
 
 PAGINA_FICHA = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -979,10 +1161,8 @@ PAGINA_FICHA = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <tbody></tbody></table></div>
 </div>
 <script>
-const pin = new URLSearchParams(location.search).get('pin');
-const P = encodeURIComponent(pin);
 const jid = location.pathname.split('/').pop();
-document.getElementById('nav').innerHTML = `<a href="/panel?pin=${{P}}">← Volver al panel</a>`;
+document.getElementById('nav').innerHTML = `<a href="/panel">← Volver al panel</a>`;
 
 function dibujar(id, valores, color, opt){{
   opt = opt||{{}};
@@ -1009,7 +1189,10 @@ function dibujar(id, valores, color, opt){{
   svg.innerHTML=s;
 }}
 
-fetch('/api/jugador/'+jid+'?pin='+P).then(r=>r.json()).then(d=>{{
+fetch('/api/jugador/'+jid).then(r=>{{
+  if(r.status===403){{ location.href='/entrenador/login'; throw new Error('no autenticado'); }}
+  return r.json();
+}}).then(d=>{{
   const j=d.jugador, serie=d.serie||[];
   document.getElementById('nombre').textContent=j.nombre;
   document.getElementById('pos').textContent=(j.posicion||'—')+' · '+serie.length+' registros';
@@ -1035,7 +1218,7 @@ fetch('/api/jugador/'+jid+'?pin='+P).then(r=>r.json()).then(d=>{{
       '<td>'+(x.rutina_ok?'✅':'❌')+'</td><td>'+(x.molestias||'—')+'</td>';
     tb.appendChild(tr);
   }});
-}}).catch(()=>{{document.body.innerHTML='<div class="wrap"><p>Error: PIN inválido o jugador inexistente.</p></div>'}});
+}}).catch(()=>{{document.body.innerHTML='<div class="wrap"><p>Error: jugador inexistente.</p></div>'}});
 </script></body></html>"""
 
 PAGINA_ADMIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -1060,7 +1243,7 @@ PAGINA_ADMIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <script>
 const pin = new URLSearchParams(location.search).get('pin');
 const P = encodeURIComponent(pin);
-document.getElementById('nav').innerHTML = '<a href="/panel?pin='+P+'">← Volver al panel</a>';
+document.getElementById('nav').innerHTML = '<a href="/panel">← Volver al panel</a>';
 
 function cargar(){{
   fetch('/api/jugadores?pin='+P).then(r=>r.json()).then(d=>{{
