@@ -1,50 +1,93 @@
 """
-App de monitoreo de rendimiento físico — Club de básquet semipro (v2).
+App de monitoreo de rendimiento físico — Club de básquet semipro (v3, PostgreSQL).
+
+Migrada de SQLite a PostgreSQL (Supabase). Los datos ahora viven en la nube.
+
+Requisitos previos:
+  1. Tener un archivo .env en esta carpeta con:
+         DATABASE_URL=postgresql://usuario:password@host:puerto/postgres
+     (la cadena "URI" que copiaste de Supabase → Project Settings → Database)
+  2. pip install -r requirements.txt
 
 Corré con:  uvicorn main:app --reload --host 0.0.0.0 --port 8000
-- Jugador:    http://<tu-ip>:8000/
-- Entrenador: http://<tu-ip>:8000/panel     (PIN por defecto: 1234)
-- Admin:      http://<tu-ip>:8000/admin      (mismo PIN)
+  - Jugador:    http://<tu-ip>:8000/
+  - Entrenador: http://<tu-ip>:8000/panel     (PIN por defecto: 1234)
+  - Admin:      http://<tu-ip>:8000/admin      (mismo PIN)
 
-Novedades v2:
-  * Alta/baja de jugadores desde la web (sin tocar la base a mano).
-  * Ficha individual con gráficos de tendencia (carga, fatiga, sueño).
-  * ACWR (ratio carga aguda/crónica): estima riesgo de lesión.
-  * Índice de disponibilidad (readiness) 0-100 por sueño/fatiga/molestias.
-  * Alertas automáticas (fatiga sostenida, ACWR en zona de riesgo).
-  * Un registro por jugador por día (si repite, se actualiza).
-  * Exportar todo a CSV.
+------------------------------------------------------------------------------
+QUÉ CAMBIÓ RESPECTO A SQLITE (para que entiendas la migración):
+  * Ya no usamos el módulo sqlite3 ni el archivo datos.db; usamos psycopg (Postgres).
+  * La conexión sale de DATABASE_URL leída del .env (nunca escrita en el código).
+  * Usamos un POOL de conexiones: abrir una conexión nueva a un Postgres remoto
+    por cada consulta es lento y agota el límite de Supabase. El pool las reutiliza.
+  * Los marcadores de parámetros cambian de  ?  (SQLite)  a  %s  (Postgres).
+  * AUTOINCREMENT  ->  SERIAL  (forma de Postgres de generar IDs).
+  * El error de nombre duplicado ahora es psycopg.errors.UniqueViolation.
+  * ON CONFLICT ... DO UPDATE (el "upsert") funciona igual: nació en Postgres.
+------------------------------------------------------------------------------
 """
 
 import csv
 import io
-import sqlite3
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from dotenv import load_dotenv
+
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
-DB = Path(__file__).parent / "datos.db"
-PIN_ENTRENADOR = "1234"  # cambialo por uno propio
+# ---------------------------------------------------------------------------
+# Configuración: credenciales desde .env (NUNCA en el código)
+# ---------------------------------------------------------------------------
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "Falta DATABASE_URL. Creá un archivo .env en esta carpeta con:\n"
+        "    DATABASE_URL=postgresql://usuario:password@host:puerto/postgres"
+    )
+
+PIN_ENTRENADOR = os.getenv("PIN_ENTRENADOR", "1234")  # también puede ir en el .env
+
+# Pool de conexiones. prepare_threshold=None desactiva los "prepared statements",
+# necesario para ser compatible con el pooler de Supabase (modo transacción).
+pool = ConnectionPool(
+    conninfo=DATABASE_URL,
+    min_size=1,
+    max_size=5,
+    kwargs={"row_factory": dict_row, "prepare_threshold": None},
+    open=False,
+)
+pool.open()
 
 app = FastAPI(title="Monitoreo Rendimiento")
+
+# Carpeta para archivos estáticos (el escudo del club va acá como escudo.png).
+# Se crea sola si no existe, así el montaje nunca falla al arrancar.
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def conn():
+    """Pide una conexión prestada al pool. Se devuelve sola al salir del `with`."""
+    return pool.connection()
 
 
 # ===========================================================================
 #  BASE DE DATOS
 # ===========================================================================
-def conn():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
-
-
 def init_db():
     with conn() as c:
         c.execute("""
             CREATE TABLE IF NOT EXISTS jugadores (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 nombre TEXT UNIQUE NOT NULL,
                 posicion TEXT DEFAULT '',
                 activo INTEGER NOT NULL DEFAULT 1
@@ -52,8 +95,8 @@ def init_db():
         """)
         c.execute("""
             CREATE TABLE IF NOT EXISTS registros (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                jugador_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                jugador_id INTEGER NOT NULL REFERENCES jugadores (id),
                 fecha TEXT NOT NULL,
                 entreno INTEGER NOT NULL,
                 rpe INTEGER,
@@ -64,15 +107,15 @@ def init_db():
                 rutina_ok INTEGER,
                 molestias TEXT,
                 creado TEXT NOT NULL,
-                UNIQUE (jugador_id, fecha),
-                FOREIGN KEY (jugador_id) REFERENCES jugadores (id)
+                UNIQUE (jugador_id, fecha)
             )
         """)
-        n = c.execute("SELECT COUNT(*) FROM jugadores").fetchone()[0]
+        n = c.execute("SELECT COUNT(*) AS n FROM jugadores").fetchone()["n"]
         if n == 0:
-            ejemplos = [("Juan Pérez", "Base"), ("Marcos Díaz", "Alero"),
-                        ("Lucas Romero", "Pívot")]
-            c.executemany("INSERT INTO jugadores (nombre, posicion) VALUES (?,?)", ejemplos)
+            for nombre, pos in [("Juan Pérez", "Base"), ("Marcos Díaz", "Alero"),
+                                ("Lucas Romero", "Pívot")]:
+                c.execute("INSERT INTO jugadores (nombre, posicion) VALUES (%s,%s)",
+                          (nombre, pos))
 
 
 init_db()
@@ -87,38 +130,35 @@ def carga(rpe, minutos):
 
 
 def readiness(sueno, fatiga, molestias):
-    """Índice de disponibilidad 0-100: mezcla sueño, fatiga y molestias.
-    Simple y transparente a propósito, para que puedas ajustarlo."""
-    s = min((sueno or 0) / 8.0, 1.0)              # 8h = puntaje pleno
-    f = (5 - (fatiga or 3)) / 4.0                  # fatiga 1(fresco)->5(agotado)
-    m = 0.5 if (molestias or "").strip() else 1.0  # hay molestia = penaliza
+    """Índice de disponibilidad 0-100: mezcla sueño, fatiga y molestias."""
+    s = min((sueno or 0) / 8.0, 1.0)
+    f = (5 - (fatiga or 3)) / 4.0
+    m = 0.5 if (molestias or "").strip() else 1.0
     return round(100 * (0.4 * s + 0.4 * f + 0.2 * m))
 
 
 def acwr_de(cargas_por_fecha, hasta):
-    """ACWR = carga aguda (prom. diario últimos 7 días) / crónica (últimos 28).
-    Zona ideal 0.8-1.3; > 1.5 = riesgo de lesión elevado.
-    `cargas_por_fecha`: dict {fecha_iso: carga_total_del_dia}."""
+    """ACWR = carga aguda (prom. 7 días) / crónica (prom. 28 días).
+    Zona ideal 0.8-1.3; > 1.5 = riesgo de lesión elevado."""
     def prom(dias):
         ini = hasta - timedelta(days=dias - 1)
         total = sum(v for f, v in cargas_por_fecha.items()
                     if ini.isoformat() <= f <= hasta.isoformat())
         return total / dias
-    aguda = prom(7)
     cronica = prom(28)
     if cronica == 0:
         return None
-    return round(aguda / cronica, 2)
+    return round(prom(7) / cronica, 2)
 
 
 def datos_jugador(jid):
     """Junta registros + métricas derivadas de un jugador."""
     with conn() as c:
-        j = c.execute("SELECT * FROM jugadores WHERE id=?", (jid,)).fetchone()
+        j = c.execute("SELECT * FROM jugadores WHERE id=%s", (jid,)).fetchone()
         if not j:
             return None
         regs = c.execute(
-            "SELECT * FROM registros WHERE jugador_id=? ORDER BY fecha", (jid,)
+            "SELECT * FROM registros WHERE jugador_id=%s ORDER BY fecha", (jid,)
         ).fetchall()
 
     cargas_por_fecha = {}
@@ -136,7 +176,6 @@ def datos_jugador(jid):
     hoy = date.today()
     acwr = acwr_de(cargas_por_fecha, hoy) if cargas_por_fecha else None
 
-    # Alertas
     alertas = []
     ult = serie[-5:]
     if len(ult) >= 3 and all(x["fatiga"] and x["fatiga"] >= 4 for x in ult[-3:]):
@@ -184,17 +223,17 @@ def registrar(
     molestias: str = Form(""),
 ):
     with conn() as c:
-        # Upsert: un registro por jugador por día
+        # Upsert: un registro por jugador por día (si repite, actualiza)
         c.execute(
             """INSERT INTO registros
                (jugador_id, fecha, entreno, rpe, minutos, fatiga, sueno, comida,
                 rutina_ok, molestias, creado)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(jugador_id, fecha) DO UPDATE SET
-                 entreno=excluded.entreno, rpe=excluded.rpe, minutos=excluded.minutos,
-                 fatiga=excluded.fatiga, sueno=excluded.sueno, comida=excluded.comida,
-                 rutina_ok=excluded.rutina_ok, molestias=excluded.molestias,
-                 creado=excluded.creado""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (jugador_id, fecha) DO UPDATE SET
+                 entreno=EXCLUDED.entreno, rpe=EXCLUDED.rpe, minutos=EXCLUDED.minutos,
+                 fatiga=EXCLUDED.fatiga, sueno=EXCLUDED.sueno, comida=EXCLUDED.comida,
+                 rutina_ok=EXCLUDED.rutina_ok, molestias=EXCLUDED.molestias,
+                 creado=EXCLUDED.creado""",
             (jugador_id, fecha, entreno, rpe, minutos, fatiga, sueno, comida,
              rutina_ok, molestias, datetime.now().isoformat(timespec="seconds")),
         )
@@ -311,9 +350,10 @@ def admin_agregar(pin: str = Form(...), nombre: str = Form(...), posicion: str =
         return JSONResponse({"error": "Nombre vacío"}, status_code=400)
     try:
         with conn() as c:
-            c.execute("INSERT INTO jugadores (nombre, posicion) VALUES (?,?)",
+            c.execute("INSERT INTO jugadores (nombre, posicion) VALUES (%s,%s)",
                       (nombre, posicion.strip()))
-    except sqlite3.IntegrityError:
+    except psycopg.errors.UniqueViolation:
+        # El nombre ya existe (columna UNIQUE). El pool hace rollback al salir del with.
         return JSONResponse({"error": "Ya existe un jugador con ese nombre"}, status_code=400)
     return {"ok": True}
 
@@ -323,7 +363,7 @@ def admin_estado(pin: str = Form(...), jugador_id: int = Form(...), activo: int 
     if pin != PIN_ENTRENADOR:
         return JSONResponse({"error": "PIN inválido"}, status_code=403)
     with conn() as c:
-        c.execute("UPDATE jugadores SET activo=? WHERE id=?", (activo, jugador_id))
+        c.execute("UPDATE jugadores SET activo=%s WHERE id=%s", (activo, jugador_id))
     return {"ok": True}
 
 
@@ -393,60 +433,201 @@ ESTILO = """
 # ===========================================================================
 #  PÁGINAS
 # ===========================================================================
-PAGINA_JUGADOR = f"""<!doctype html><html lang="es"><head>
+# NOTA: string normal (no f-string) a propósito, para no tener que escapar las
+# llaves { } de CSS y JavaScript. Los marcadores {{OPCIONES}} y {{HOY}} se
+# reemplazan desde la ruta con .replace().
+PAGINA_JUGADOR = """<!doctype html>
+<html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mi día — Rendimiento</title>{ESTILO}</head><body><div class="wrap">
-<header class="top"><div class="bola">🏀</div>
-<div><h1>Mi día</h1><p class="sub">Cargá tus datos en 1 minuto</p></div></header>
-<form action="/registrar" method="post">
-<div class="card">
-  <label>Jugador</label>
-  <select name="jugador_id" required>{{{{OPCIONES}}}}</select>
-  <label>Fecha</label>
-  <input type="date" name="fecha" value="{{{{HOY}}}}" required>
-  <label>¿Entrenaste hoy?</label>
-  <div class="seg">
-    <input type="radio" name="entreno" id="e1" value="1" checked><label for="e1">Sí</label>
-    <input type="radio" name="entreno" id="e0" value="0"><label for="e0">No</label>
-  </div>
+<title>Corey · Mi día</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --azul:#214EE0; --azul-800:#1A3EB0; --azul-050:#EDF1FE;
+    --negro:#111318; --gris:#6B7280; --linea:#E6E8EE; --blanco:#FFFFFF; --fondo:#F5F7FB;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0}
+  body{font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--fondo);color:var(--negro);line-height:1.45;-webkit-font-smoothing:antialiased}
+  .app{max-width:440px;margin:0 auto;min-height:100vh}
+  .hero{background:var(--azul);color:#fff;padding:22px 20px 0;position:relative;overflow:hidden}
+  .hero .marca{display:flex;align-items:center;gap:12px}
+  .escudo{width:44px;height:44px;border-radius:11px;flex:none;background:rgba(255,255,255,.14);
+    display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.25)}
+  .escudo img{width:100%;height:100%;object-fit:contain}
+  .escudo .mono{font-family:"Saira";font-weight:800;font-size:24px;color:#fff}
+  .wordmark{font-family:"Saira";font-weight:800;font-size:26px;letter-spacing:.06em;line-height:1}
+  .wordmark small{display:block;font-weight:500;font-size:11px;letter-spacing:.18em;opacity:.7;margin-top:3px}
+  .hero h1{font-family:"Saira";font-weight:700;font-size:34px;line-height:1;margin:20px 0 4px}
+  .hero .fecha{font-size:13px;opacity:.85;margin:0 0 20px;text-transform:capitalize}
+  .cancha{height:26px;border-top:2px solid rgba(255,255,255,.35);position:relative;margin:0 -20px}
+  .cancha::before{content:"";position:absolute;top:-14px;left:50%;transform:translateX(-50%);
+    width:26px;height:26px;border:2px solid rgba(255,255,255,.35);border-radius:50%;background:var(--azul)}
+  .hoja{background:var(--blanco);border-radius:20px 20px 0 0;margin-top:-8px;padding:22px 20px 120px;
+    position:relative;box-shadow:0 -2px 20px rgba(17,19,24,.04)}
+  .campo{margin-bottom:18px}
+  .campo > label{display:block;font-weight:600;font-size:.9rem;margin-bottom:8px}
+  select,input[type=date],input[type=number],textarea{width:100%;padding:13px 12px;
+    border:1.5px solid var(--linea);border-radius:12px;font-size:1rem;font-family:inherit;background:#fff;color:var(--negro)}
+  select:focus,input:focus,textarea:focus{outline:none;border-color:var(--azul);box-shadow:0 0 0 4px var(--azul-050)}
+  textarea{min-height:64px;resize:vertical}
+  .par{display:flex;gap:12px}.par>div{flex:1}
+  .sep{height:1px;background:var(--linea);margin:22px 0}
+  .titulo-sec{font-family:"Saira";font-weight:700;font-size:1.05rem;margin:0 0 12px}
+  .toggle{display:flex;gap:8px}
+  .toggle input{position:absolute;opacity:0;pointer-events:none}
+  .toggle label{flex:1;text-align:center;padding:12px;border:1.5px solid var(--linea);border-radius:12px;
+    font-weight:600;cursor:pointer;transition:.12s;background:#fff}
+  .toggle input:checked + label{background:var(--negro);color:#fff;border-color:var(--negro)}
+  .chips{display:grid;gap:8px}
+  .chips.diez{grid-template-columns:repeat(5,1fr)}
+  .chips.cinco{grid-template-columns:repeat(5,1fr)}
+  .chips input{position:absolute;opacity:0;pointer-events:none}
+  .chips label{aspect-ratio:1/1;display:grid;place-items:center;cursor:pointer;
+    border:1.5px solid var(--linea);border-radius:12px;background:#fff;
+    font-family:"Saira";font-weight:700;font-size:1.15rem;color:var(--negro);
+    transition:transform .08s, background .12s, border-color .12s}
+  .chips label:active{transform:scale(.94)}
+  .chips input:checked + label{background:var(--azul);border-color:var(--azul);color:#fff;
+    box-shadow:0 4px 12px rgba(33,78,224,.35)}
+  .chips .extremo{font-size:.7rem;color:var(--gris);display:flex;justify-content:space-between;
+    grid-column:1/-1;margin-top:2px;font-weight:500}
+  .barra{position:fixed;left:0;right:0;bottom:0;max-width:440px;margin:0 auto;
+    padding:14px 20px calc(14px + env(safe-area-inset-bottom));
+    background:linear-gradient(to top, #fff 70%, rgba(255,255,255,0))}
+  .guardar{width:100%;padding:16px;border:0;border-radius:14px;background:var(--azul);color:#fff;
+    font-family:"Saira";font-weight:700;font-size:1.1rem;cursor:pointer;
+    transition:transform .08s, background .12s;box-shadow:0 6px 18px rgba(33,78,224,.35)}
+  .guardar:hover{background:var(--azul-800)}
+  .guardar:active{transform:scale(.99)}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style></head>
+<body><div class="app">
+  <header class="hero">
+    <div class="marca">
+      <div class="escudo">
+        <img src="/static/escudo.png" alt="Escudo Corey" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+        <span class="mono" style="display:none">C</span>
+      </div>
+      <div class="wordmark">COREY<small>RENDIMIENTO</small></div>
+    </div>
+    <h1>Mi día</h1>
+    <p class="fecha" id="fecha">—</p>
+    <div class="cancha"></div>
+  </header>
+  <main class="hoja">
+    <form action="/registrar" method="post">
+      <div class="campo">
+        <label for="jugador">Jugador</label>
+        <select id="jugador" name="jugador_id" required>
+          <option value="" disabled selected>Elegí tu nombre</option>
+          {{OPCIONES}}
+        </select>
+      </div>
+      <div class="campo">
+        <label for="fechaIn">Fecha</label>
+        <input type="date" id="fechaIn" name="fecha" value="{{HOY}}" required>
+      </div>
+      <div class="campo">
+        <label>¿Entrenaste hoy?</label>
+        <div class="toggle">
+          <input type="radio" name="entreno" id="ent1" value="1" checked><label for="ent1">Sí</label>
+          <input type="radio" name="entreno" id="ent0" value="0"><label for="ent0">No</label>
+        </div>
+      </div>
+      <div class="sep"></div>
+      <h3 class="titulo-sec">Intensidad del entrenamiento</h3>
+      <div class="chips diez">
+        <input type="radio" name="rpe" id="rpe1" value="1"><label for="rpe1">1</label>
+        <input type="radio" name="rpe" id="rpe2" value="2"><label for="rpe2">2</label>
+        <input type="radio" name="rpe" id="rpe3" value="3"><label for="rpe3">3</label>
+        <input type="radio" name="rpe" id="rpe4" value="4"><label for="rpe4">4</label>
+        <input type="radio" name="rpe" id="rpe5" value="5"><label for="rpe5">5</label>
+        <input type="radio" name="rpe" id="rpe6" value="6"><label for="rpe6">6</label>
+        <input type="radio" name="rpe" id="rpe7" value="7"><label for="rpe7">7</label>
+        <input type="radio" name="rpe" id="rpe8" value="8"><label for="rpe8">8</label>
+        <input type="radio" name="rpe" id="rpe9" value="9"><label for="rpe9">9</label>
+        <input type="radio" name="rpe" id="rpe10" value="10"><label for="rpe10">10</label>
+        <div class="extremo"><span>Muy suave</span><span>Máximo esfuerzo</span></div>
+      </div>
+      <div class="par" style="margin-top:18px">
+        <div class="campo" style="margin:0">
+          <label for="minutos">Minutos</label>
+          <input type="number" id="minutos" name="minutos" min="0" value="0" inputmode="numeric">
+        </div>
+        <div class="campo" style="margin:0">
+          <label for="sueno">Horas de sueño</label>
+          <input type="number" id="sueno" name="sueno" step="0.5" min="0" value="8" inputmode="decimal">
+        </div>
+      </div>
+      <div class="campo" style="margin-top:18px">
+        <label>Nivel de cansancio</label>
+        <div class="chips cinco">
+          <input type="radio" name="fatiga" id="fat1" value="1"><label for="fat1">1</label>
+          <input type="radio" name="fatiga" id="fat2" value="2"><label for="fat2">2</label>
+          <input type="radio" name="fatiga" id="fat3" value="3" checked><label for="fat3">3</label>
+          <input type="radio" name="fatiga" id="fat4" value="4"><label for="fat4">4</label>
+          <input type="radio" name="fatiga" id="fat5" value="5"><label for="fat5">5</label>
+          <div class="extremo"><span>Fresco</span><span>Agotado</span></div>
+        </div>
+      </div>
+      <div class="sep"></div>
+      <div class="campo">
+        <label>¿Completaste tu rutina?</label>
+        <div class="toggle">
+          <input type="radio" name="rutina_ok" id="rut1" value="1" checked><label for="rut1">Sí</label>
+          <input type="radio" name="rutina_ok" id="rut0" value="0"><label for="rut0">No</label>
+        </div>
+      </div>
+      <div class="campo">
+        <label for="comida">¿Qué comiste hoy?</label>
+        <textarea id="comida" name="comida" placeholder="Desayuno, almuerzo, cena, snacks…"></textarea>
+      </div>
+      <div class="campo">
+        <label for="molestias">Molestias o dolores</label>
+        <textarea id="molestias" name="molestias" placeholder="Ej: molestia en rodilla derecha (opcional)"></textarea>
+      </div>
+      <div class="barra">
+        <button class="guardar" type="submit">Guardar mi día</button>
+      </div>
+    </form>
+  </main>
 </div>
-<div class="card">
-  <label>Intensidad del entrenamiento (RPE)</label>
-  <div class="seg">
-    {"".join(f'<input type="radio" name="rpe" id="r{i}" value="{i}"><label for="r{i}">{i}</label>' for i in range(1,11))}
-  </div>
-  <p class="ayuda">1 = muy suave · 10 = máximo esfuerzo</p>
-  <div class="fila">
-    <div><label>Minutos</label><input type="number" name="minutos" min="0" value="0"></div>
-    <div><label>Horas de sueño</label><input type="number" name="sueno" step="0.5" min="0" value="8"></div>
-  </div>
-  <label>Nivel de cansancio</label>
-  <div class="seg">
-    {"".join(f'<input type="radio" name="fatiga" id="f{i}" value="{i}"{" checked" if i==3 else ""}><label for="f{i}">{i}</label>' for i in range(1,6))}
-  </div>
-  <p class="ayuda">1 = fresco · 5 = agotado</p>
-</div>
-<div class="card">
-  <label>¿Completaste tu rutina asignada?</label>
-  <div class="seg">
-    <input type="radio" name="rutina_ok" id="ro1" value="1" checked><label for="ro1">Sí</label>
-    <input type="radio" name="rutina_ok" id="ro0" value="0"><label for="ro0">No</label>
-  </div>
-  <label>¿Qué comiste hoy?</label>
-  <textarea name="comida" placeholder="Desayuno, almuerzo, cena, snacks..."></textarea>
-  <label>Molestias o dolores (opcional)</label>
-  <textarea name="molestias" placeholder="Ej: molestia en rodilla derecha"></textarea>
-</div>
-<button class="enviar" type="submit">Enviar registro</button>
-</form></div></body></html>"""
+<script>
+  var hoy = new Date();
+  document.getElementById('fecha').textContent =
+    hoy.toLocaleDateString('es-AR', {weekday:'long', day:'numeric', month:'long'});
+</script>
+</body></html>"""
 
-PAGINA_OK = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">{ESTILO}</head>
-<body><div class="wrap"><div class="exito">
-<div class="big">✅</div><h1>¡Registrado!</h1>
-<p class="sub">Tu disponibilidad de hoy: <b>{{{{READY}}}}/100</b></p>
-<p style="margin-top:30px"><a href="/">← Cargar otro</a></p>
-</div></div></body></html>"""
+PAGINA_OK = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corey · Guardado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira:wght@600;700;800&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0}
+  body{font-family:"Inter",system-ui,sans-serif;background:#214EE0;color:#fff;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:40px;-webkit-font-smoothing:antialiased}
+  .tic{width:80px;height:80px;border-radius:50%;background:#fff;color:#214EE0;font-size:42px;
+    display:grid;place-items:center;margin-bottom:20px}
+  h2{font-family:"Saira";font-weight:800;font-size:2rem;margin-bottom:8px}
+  .disp{font-family:"Saira";font-weight:700;font-size:1.1rem;opacity:.95;margin-bottom:28px}
+  a{background:#fff;color:#214EE0;text-decoration:none;padding:14px 28px;border-radius:12px;
+    font-family:"Saira";font-weight:700;font-size:1rem}
+</style></head>
+<body>
+  <div class="tic">✓</div>
+  <h2>¡Día guardado!</h2>
+  <p class="disp">Tu disponibilidad de hoy: {{READY}}/100</p>
+  <a href="/">Cargar otro</a>
+</body></html>"""
 
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">{ESTILO}</head>
@@ -546,7 +727,6 @@ const P = encodeURIComponent(pin);
 const jid = location.pathname.split('/').pop();
 document.getElementById('nav').innerHTML = `<a href="/panel?pin=${{P}}">← Volver al panel</a>`;
 
-// Mini-gráfico en SVG, sin librerías externas
 function dibujar(id, valores, color, opt){{
   opt = opt||{{}};
   const tipo = opt.tipo||'linea';
