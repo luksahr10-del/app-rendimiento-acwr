@@ -294,7 +294,7 @@ def formulario(request: Request):
         return HTMLResponse("")
     j = jugador_logueado(request)
     if not j:
-        return RedirectResponse("/login", status_code=303)
+        return HTMLResponse(PAGINA_BIENVENIDA)
     return HTMLResponse(
         PAGINA_JUGADOR.replace("{{NOMBRE}}", j["nombre"])
         .replace("{{HOY}}", date.today().isoformat())
@@ -746,7 +746,7 @@ ESTILO = """
 PAGINA_JUGADOR = """<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Mi día</title>
+<title>Río Corey · Mi día</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -766,7 +766,7 @@ PAGINA_JUGADOR = """<!doctype html>
     display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.25)}
   .escudo img{width:100%;height:100%;object-fit:contain}
   .escudo .mono{font-family:"Saira";font-weight:800;font-size:24px;color:#fff}
-  .wordmark{font-family:"Saira";font-weight:800;font-size:26px;letter-spacing:.06em;line-height:1}
+  .wordmark{font-family:"Saira";font-weight:800;font-size:21px;letter-spacing:.02em;line-height:1;white-space:nowrap}
   .wordmark small{display:block;font-weight:500;font-size:11px;letter-spacing:.18em;opacity:.7;margin-top:3px}
   .salir{margin-left:auto;color:#fff;opacity:.85;font-size:.78rem;font-weight:600;text-decoration:none;
     border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:6px 12px;flex:none}
@@ -818,10 +818,10 @@ PAGINA_JUGADOR = """<!doctype html>
   <header class="hero">
     <div class="marca">
       <div class="escudo">
-        <img src="/static/escudo.png" alt="Escudo Corey" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+        <img src="/static/escudo.png" alt="Escudo Río Corey" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
         <span class="mono" style="display:none">C</span>
       </div>
-      <div class="wordmark">COREY<small>RENDIMIENTO</small></div>
+      <div class="wordmark">RÍO COREY<small>RENDIMIENTO</small></div>
       <a href="/logout" class="salir">Salir</a>
     </div>
     <h1>Hola, {{NOMBRE}}</h1>
@@ -910,7 +910,7 @@ PAGINA_JUGADOR = """<!doctype html>
 PAGINA_OK = """<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Guardado</title>
+<title>Río Corey · Guardado</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira:wght@600;700;800&family=Inter:wght@400;500&display=swap" rel="stylesheet">
@@ -953,6 +953,15 @@ _ESTILO_CUENTA = """
   .alt a{color:#214EE0;font-weight:600;text-decoration:none}
 </style>"""
 
+# Igual que _ESTILO_CUENTA pero con el fondo de marca (jugador y pelota) en vez
+# de azul liso. Solo para las pantallas de jugador (bienvenida/login/registro);
+# el entrenador sigue con _ESTILO_CUENTA.
+_ESTILO_CUENTA_JUGADOR = _ESTILO_CUENTA.replace(
+    "background:#214EE0;min-height:100vh;",
+    "background:#05081f url('/static/fondo-riocorey.png') top center / cover no-repeat;"
+    "min-height:100vh;",
+)
+
 _HEAD_FUENTES = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -961,7 +970,7 @@ _HEAD_FUENTES = """
 PAGINA_LOGIN = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Río Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
@@ -982,7 +991,7 @@ PAGINA_LOGIN = f"""<!doctype html>
 PAGINA_REGISTRO = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Río Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <div class="card">
     <h1>Creá tu cuenta</h1>
@@ -1012,6 +1021,47 @@ PAGINA_REGISTRO = f"""<!doctype html>
   </div>
 </body></html>"""
 
+PAGINA_BIENVENIDA = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Río Corey</title>{_HEAD_FUENTES}
+<style>
+  *{{box-sizing:border-box}}
+  html,body{{margin:0;height:100%}}
+  body{{font-family:"Inter",system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased;
+    background:#05081f url('/static/fondo-riocorey.png') top center / cover no-repeat;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+    padding:28px 28px 32px;text-align:center}}
+  .botones{{width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;margin-bottom:22px}}
+  .btn{{display:flex;align-items:center;width:100%;padding:15px 22px;border-radius:999px;
+    background:linear-gradient(135deg,#4266e0,#1c3fc4);color:#fff;text-decoration:none;
+    font-family:"Saira";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
+    border:1px solid rgba(255,255,255,.15)}}
+  .btn .icono{{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.18);
+    display:grid;place-items:center;flex:none}}
+  .btn span.txt{{flex:1;text-align:center;margin-right:32px}}
+  .redes{{display:flex;gap:16px}}
+  .redes a{{color:#aab4e8;display:grid;place-items:center;width:36px;height:36px;
+    border-radius:50%;border:1px solid rgba(170,180,232,.35)}}
+</style></head>
+<body>
+  <div class="botones">
+    <a class="btn" href="/registro">
+      <span class="icono"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+      <span class="txt">Regístrate</span>
+    </a>
+    <a class="btn" href="/login">
+      <span class="icono"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span>
+      <span class="txt">Inicia sesión</span>
+    </a>
+  </div>
+  <div class="redes">
+    <a href="https://www.instagram.com/corey__hoops/" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg></a>
+    <a href="https://riocoreybasquet.wixsite.com/coreyhoops" target="_blank" rel="noopener noreferrer" aria-label="Sitio web"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 4 6.1 4 9s-1.5 6.3-4 9c-2.5-2.7-4-6.1-4-9s1.5-6.3 4-9Z"/></svg></a>
+    <a href="https://www.youtube.com/@riocorey" target="_blank" rel="noopener noreferrer" aria-label="YouTube"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></svg></a>
+  </div>
+</body></html>"""
+
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">{ESTILO}</head>
 <body><div class="wrap"><header class="top"><div class="bola">🔒</div>
@@ -1023,7 +1073,7 @@ PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Río Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
 <body>
   <div class="card">
     <h1>Panel del cuerpo técnico</h1>
@@ -1044,7 +1094,7 @@ PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
 PAGINA_ENTRENADOR_REGISTRO = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Río Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
 <body>
   <div class="card">
     <h1>Crear cuenta de entrenador</h1>
