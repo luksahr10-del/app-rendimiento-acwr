@@ -953,25 +953,94 @@ _ESTILO_CUENTA = """
   .alt a{color:#214EE0;font-weight:600;text-decoration:none}
 </style>"""
 
-# Igual que _ESTILO_CUENTA pero con el fondo de marca (jugador y pelota) en vez
-# de azul liso. Solo para las pantallas de jugador (bienvenida/login/registro);
-# el entrenador sigue con _ESTILO_CUENTA.
-_ESTILO_CUENTA_JUGADOR = _ESTILO_CUENTA.replace(
-    "background:#214EE0;min-height:100vh;",
-    "background:#05081f url('/static/fondo-riocorey.png') top center / cover no-repeat;"
-    "min-height:100vh;",
-)
+# Variante de _ESTILO_CUENTA para las pantallas de jugador (bienvenida/login/
+# registro): arriba va la imagen de marca completa (sin recortar) + los
+# botones Registrate/Inicia sesión + redes, y debajo la tarjeta blanca con el
+# formulario. El entrenador sigue con _ESTILO_CUENTA (fondo azul liso).
+_ESTILO_CUENTA_JUGADOR = """
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Inter",system-ui,sans-serif;background:#05081f;min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;padding:0 0 32px;-webkit-font-smoothing:antialiased}
+  .hero{width:100%;max-width:460px}
+  .hero img{width:100%;display:block}
+  .botones{position:relative;z-index:2;width:100%;max-width:380px;margin:-16% auto 0;
+    padding:0 28px;display:flex;flex-direction:column;gap:14px}
+  .btn{display:flex;align-items:center;width:100%;padding:15px 22px;border-radius:999px;
+    background:linear-gradient(135deg,#4266e0,#1c3fc4);color:#fff;text-decoration:none;
+    font-family:"Saira";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
+    border:1px solid rgba(255,255,255,.15);cursor:pointer}
+  .btn.activo{background:rgba(255,255,255,.12);box-shadow:none;color:#cfd7ff}
+  .btn .icono{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.18);
+    display:grid;place-items:center;flex:none}
+  .btn span.txt{flex:1;text-align:center;margin-right:32px}
+  .redes{position:relative;z-index:2;display:flex;gap:16px;margin:22px 0 30px}
+  .redes a{color:#aab4e8;display:grid;place-items:center;width:36px;height:36px;
+    border-radius:50%;border:1px solid rgba(170,180,232,.35)}
+  .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:calc(100% - 56px);
+    box-shadow:0 20px 50px rgba(5,8,31,.5)}
+  h1{font-family:"Saira";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
+  p.sub{color:#6B7280;font-size:.9rem;margin:0 0 22px}
+  label{display:block;font-weight:600;font-size:.88rem;margin:14px 0 6px;color:#111318}
+  input{width:100%;padding:12px;border:1.5px solid #E6E8EE;border-radius:10px;font-size:1rem;font-family:inherit}
+  input:focus{outline:none;border-color:#214EE0;box-shadow:0 0 0 4px #EDF1FE}
+  .par{display:flex;gap:10px}.par>div{flex:1}
+  button{width:100%;padding:14px;border:0;border-radius:12px;background:#214EE0;color:#fff;
+    font-family:"Saira";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
+  .error{background:#fde8e2;color:#c0402a;padding:10px 12px;border-radius:10px;font-size:.85rem;margin:0 0 8px}
+  .alt{display:none}
+</style>"""
 
 _HEAD_FUENTES = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">"""
 
+_ICONO_LAPIZ = ('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>')
+_ICONO_PERSONA = ('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+                   'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                   '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>')
+
+
+def _boton_cuenta(href, icono, texto, activo):
+    """Botón Registrate/Inicia sesión. Si `activo` (ya estás en esa página),
+    se dibuja como bloque sin link en vez de <a>, para no auto-navegar."""
+    tag = "div" if activo else "a"
+    href_attr = "" if activo else f' href="{href}"'
+    clase = "btn activo" if activo else "btn"
+    return (
+        f'<{tag} class="{clase}"{href_attr}>'
+        f'<span class="icono">{icono}</span><span class="txt">{texto}</span>'
+        f"</{tag}>"
+    )
+
+
+def bloque_hero(activo=None):
+    """Bloque compartido: imagen de marca completa + botones + redes.
+    `activo` es None (bienvenida), "login" o "registro" (esa página)."""
+    return f"""
+  <div class="hero">
+    <img src="/static/fondo-riocorey.png" alt="Río Corey — Club de básquetbol. Vive el juego.">
+  </div>
+  <div class="botones">
+    {_boton_cuenta("/registro", _ICONO_LAPIZ, "Regístrate", activo == "registro")}
+    {_boton_cuenta("/login", _ICONO_PERSONA, "Inicia sesión", activo == "login")}
+  </div>
+  <div class="redes">
+    <a href="https://www.instagram.com/corey__hoops/" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg></a>
+    <a href="https://riocoreybasquet.wixsite.com/coreyhoops" target="_blank" rel="noopener noreferrer" aria-label="Sitio web"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 4 6.1 4 9s-1.5 6.3-4 9c-2.5-2.7-4-6.1-4-9s1.5-6.3 4-9Z"/></svg></a>
+    <a href="https://www.youtube.com/@riocorey" target="_blank" rel="noopener noreferrer" aria-label="YouTube"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></svg></a>
+  </div>"""
+
+
 PAGINA_LOGIN = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Río Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
+  {bloque_hero("login")}
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
     <p class="sub">Ingresá para cargar tu día</p>
@@ -993,6 +1062,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Río Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
+  {bloque_hero("registro")}
   <div class="card">
     <h1>Creá tu cuenta</h1>
     <p class="sub">Para registrar tu día a día</p>
@@ -1047,24 +1117,7 @@ PAGINA_BIENVENIDA = f"""<!doctype html>
     border-radius:50%;border:1px solid rgba(170,180,232,.35)}}
 </style></head>
 <body>
-  <div class="hero">
-    <img src="/static/fondo-riocorey.png" alt="Río Corey — Club de básquetbol. Vive el juego.">
-  </div>
-  <div class="botones">
-    <a class="btn" href="/registro">
-      <span class="icono"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
-      <span class="txt">Regístrate</span>
-    </a>
-    <a class="btn" href="/login">
-      <span class="icono"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span>
-      <span class="txt">Inicia sesión</span>
-    </a>
-  </div>
-  <div class="redes">
-    <a href="https://www.instagram.com/corey__hoops/" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg></a>
-    <a href="https://riocoreybasquet.wixsite.com/coreyhoops" target="_blank" rel="noopener noreferrer" aria-label="Sitio web"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 4 6.1 4 9s-1.5 6.3-4 9c-2.5-2.7-4-6.1-4-9s1.5-6.3 4-9Z"/></svg></a>
-    <a href="https://www.youtube.com/@riocorey" target="_blank" rel="noopener noreferrer" aria-label="YouTube"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l6 3-6 3V9Z" fill="currentColor" stroke="none"/></svg></a>
-  </div>
+  {bloque_hero()}
 </body></html>"""
 
 PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
