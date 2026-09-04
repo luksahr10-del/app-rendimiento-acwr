@@ -1027,12 +1027,14 @@ PAGINA_BIENVENIDA = f"""<!doctype html>
 <title>Río Corey</title>{_HEAD_FUENTES}
 <style>
   *{{box-sizing:border-box}}
-  html,body{{margin:0;height:100%}}
+  html,body{{margin:0}}
   body{{font-family:"Inter",system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased;
-    background:#05081f url('/static/fondo-riocorey.png') top center / cover no-repeat;
-    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
-    padding:28px 28px 32px;text-align:center}}
-  .botones{{width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;margin-bottom:22px}}
+    background:#05081f;min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    text-align:center;overflow-x:hidden}}
+  .hero{{width:100%;max-width:460px;position:relative}}
+  .hero img{{width:100%;display:block}}
+  .botones{{position:relative;z-index:2;width:100%;max-width:380px;margin:-16% auto 0;
+    padding:0 28px;display:flex;flex-direction:column;gap:14px}}
   .btn{{display:flex;align-items:center;width:100%;padding:15px 22px;border-radius:999px;
     background:linear-gradient(135deg,#4266e0,#1c3fc4);color:#fff;text-decoration:none;
     font-family:"Saira";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
@@ -1040,11 +1042,14 @@ PAGINA_BIENVENIDA = f"""<!doctype html>
   .btn .icono{{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.18);
     display:grid;place-items:center;flex:none}}
   .btn span.txt{{flex:1;text-align:center;margin-right:32px}}
-  .redes{{display:flex;gap:16px}}
+  .redes{{position:relative;z-index:2;display:flex;gap:16px;margin:22px 0 32px}}
   .redes a{{color:#aab4e8;display:grid;place-items:center;width:36px;height:36px;
     border-radius:50%;border:1px solid rgba(170,180,232,.35)}}
 </style></head>
 <body>
+  <div class="hero">
+    <img src="/static/fondo-riocorey.png" alt="Río Corey — Club de básquetbol. Vive el juego.">
+  </div>
   <div class="botones">
     <a class="btn" href="/registro">
       <span class="icono"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
