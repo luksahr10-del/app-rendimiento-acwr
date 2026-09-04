@@ -31,6 +31,7 @@ import csv
 import html
 import io
 import os
+import secrets
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -80,8 +81,14 @@ pool = ConnectionPool(
 )
 pool.open()
 
+# En Render (HTTPS) la cookie de sesión va con el flag Secure. Para probar
+# local por http, poné SECURE_COOKIES=false en el .env de tu máquina.
+SECURE_COOKIES = os.getenv("SECURE_COOKIES", "true").lower() != "false"
+
 app = FastAPI(title="Monitoreo Rendimiento")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+app.add_middleware(
+    SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=SECURE_COOKIES
+)
 
 # Carpeta para archivos estáticos (el escudo del club va acá como escudo.png).
 # Se crea sola si no existe, así el montaje nunca falla al arrancar.
@@ -101,6 +108,19 @@ def hash_password(pw: str) -> str:
 
 def check_password(pw: str, hashed: str) -> bool:
     return bcrypt.checkpw(pw.encode(), hashed.encode())
+
+
+def generar_csrf(request: Request) -> str:
+    """Token anti-CSRF ligado a la sesión: uno por navegador, se reusa entre GETs."""
+    tok = request.session.get("csrf")
+    if not tok:
+        tok = secrets.token_urlsafe(32)
+        request.session["csrf"] = tok
+    return tok
+
+
+def csrf_valido(request: Request, token: str) -> bool:
+    return secrets.compare_digest(request.session.get("csrf", ""), token or "")
 
 
 # ===========================================================================
@@ -211,13 +231,16 @@ def formulario(request: Request):
     if not j:
         return RedirectResponse("/login", status_code=303)
     return HTMLResponse(
-        PAGINA_JUGADOR.replace("{{NOMBRE}}", j["nombre"]).replace("{{HOY}}", date.today().isoformat())
+        PAGINA_JUGADOR.replace("{{NOMBRE}}", j["nombre"])
+        .replace("{{HOY}}", date.today().isoformat())
+        .replace("{{CSRF}}", generar_csrf(request))
     )
 
 
 @app.post("/registrar")
 def registrar(
     request: Request,
+    csrf_token: str = Form(...),
     fecha: str = Form(...),
     entreno: int = Form(...),
     rpe: int = Form(0),
@@ -231,6 +254,8 @@ def registrar(
     j = jugador_logueado(request)
     if not j:
         return RedirectResponse("/login", status_code=303)
+    if not csrf_valido(request, csrf_token):
+        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
     with conn() as c:
         # Upsert: un registro por jugador por día (si repite, actualiza)
         c.execute(
@@ -254,20 +279,25 @@ def registrar(
 #  RUTAS — CUENTA DEL JUGADOR (registro / login / logout)
 # ===========================================================================
 @app.get("/registro", response_class=HTMLResponse)
-def registro_form(error: str = ""):
+def registro_form(request: Request, error: str = ""):
     msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
-    return HTMLResponse(PAGINA_REGISTRO.replace("{{ERROR}}", msg))
+    return HTMLResponse(
+        PAGINA_REGISTRO.replace("{{ERROR}}", msg).replace("{{CSRF}}", generar_csrf(request))
+    )
 
 
 @app.post("/registro")
 def registro(
     request: Request,
+    csrf_token: str = Form(...),
     nombre: str = Form(...),
     posicion: str = Form(""),
     email: str = Form(...),
     password: str = Form(...),
     password2: str = Form(...),
 ):
+    if not csrf_valido(request, csrf_token):
+        return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
     nombre = nombre.strip()
     email = email.strip().lower()
     if not nombre or "@" not in email:
@@ -298,13 +328,17 @@ def registro(
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_form(error: str = ""):
+def login_form(request: Request, error: str = ""):
     msg = f'<p class="error">{html.escape(error)}</p>' if error else ""
-    return HTMLResponse(PAGINA_LOGIN.replace("{{ERROR}}", msg))
+    return HTMLResponse(
+        PAGINA_LOGIN.replace("{{ERROR}}", msg).replace("{{CSRF}}", generar_csrf(request))
+    )
 
 
 @app.post("/login")
-def login(request: Request, email: str = Form(...), password: str = Form(...)):
+def login(request: Request, csrf_token: str = Form(...), email: str = Form(...), password: str = Form(...)):
+    if not csrf_valido(request, csrf_token):
+        return RedirectResponse("/login?error=" + quote("Sesión expirada, probá de nuevo."), status_code=303)
     email = email.strip().lower()
     with conn() as c:
         j = c.execute("SELECT * FROM jugadores WHERE email=%s AND activo=1", (email,)).fetchone()
@@ -602,6 +636,7 @@ PAGINA_JUGADOR = """<!doctype html>
   </header>
   <main class="hoja">
     <form action="/registrar" method="post">
+      <input type="hidden" name="csrf_token" value="{{CSRF}}">
       <div class="campo">
         <label for="fechaIn">Fecha</label>
         <input type="date" id="fechaIn" name="fecha" value="{{HOY}}" required>
@@ -739,6 +774,7 @@ PAGINA_LOGIN = f"""<!doctype html>
     <p class="sub">Ingresá para cargar tu día</p>
     {{{{ERROR}}}}
     <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
       <label for="email">Email</label>
       <input type="email" id="email" name="email" required autofocus>
       <label for="password">Contraseña</label>
@@ -759,6 +795,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
     <p class="sub">Para registrar tu día a día</p>
     {{{{ERROR}}}}
     <form method="post" action="/registro">
+      <input type="hidden" name="csrf_token" value="{{{{CSRF}}}}">
       <label for="nombre">Nombre y apellido</label>
       <input type="text" id="nombre" name="nombre" required autofocus>
       <label for="posicion">Posición (opcional)</label>
