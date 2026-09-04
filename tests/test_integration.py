@@ -252,3 +252,51 @@ def test_admin_con_pin_correcto_muestra_el_panel(client):
     r = client.get("/admin", params={"pin": "999999"})
     assert r.status_code == 200
     assert "Gestionar jugadores" in r.text
+
+
+def test_api_jugadores_no_expone_password_hash(client):
+    registrar_jugador(client, "Sin Hash Expuesto", "sinhash@example.com")
+    r = client.get("/api/jugadores", params={"pin": "999999"})
+    assert r.status_code == 200
+    jugadores = r.json()["jugadores"]
+    assert any(j["email"] == "sinhash@example.com" for j in jugadores)
+    assert all("password_hash" not in j for j in jugadores)
+
+
+def test_admin_resetear_clave_permite_loguear_con_la_nueva(client):
+    registrar_jugador(client, "Reset Clave", "resetclave@example.com")
+
+    r = client.get("/api/jugadores", params={"pin": "999999"})
+    jugador = next(j for j in r.json()["jugadores"] if j["email"] == "resetclave@example.com")
+
+    r = client.post(
+        "/admin/resetear_clave",
+        data={"pin": "999999", "jugador_id": jugador["id"]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    clave_nueva = body["clave_nueva"]
+
+    fresco = TestClient(app_module.app)
+    r = fresco.get("/login")
+    token = csrf_de(r.text)
+    r = fresco.post(
+        "/login",
+        data={"csrf_token": token, "email": "resetclave@example.com", "password": clave_nueva},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+
+
+def test_admin_resetear_clave_requiere_pin(client):
+    registrar_jugador(client, "Sin Pin Reset", "sinpinreset@example.com")
+    r = client.get("/api/jugadores", params={"pin": "999999"})
+    jugador = next(j for j in r.json()["jugadores"] if j["email"] == "sinpinreset@example.com")
+
+    r = client.post(
+        "/admin/resetear_clave",
+        data={"pin": "000000", "jugador_id": jugador["id"]},
+    )
+    assert r.status_code == 403

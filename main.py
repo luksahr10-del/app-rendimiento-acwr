@@ -644,7 +644,9 @@ def api_jugadores(pin: str = ""):
     if pin != PIN_ENTRENADOR:
         return JSONResponse({"error": "PIN inválido"}, status_code=403)
     with conn() as c:
-        js = c.execute("SELECT * FROM jugadores ORDER BY nombre").fetchall()
+        js = c.execute(
+            "SELECT id, nombre, posicion, activo, email FROM jugadores ORDER BY nombre"
+        ).fetchall()
     return {"jugadores": [dict(j) for j in js]}
 
 
@@ -672,6 +674,24 @@ def admin_estado(pin: str = Form(...), jugador_id: int = Form(...), activo: int 
     with conn() as c:
         c.execute("UPDATE jugadores SET activo=%s WHERE id=%s", (activo, jugador_id))
     return {"ok": True}
+
+
+@app.post("/admin/resetear_clave")
+def admin_resetear_clave(pin: str = Form(...), jugador_id: int = Form(...)):
+    """Genera una contraseña temporal nueva para un jugador que no puede
+    entrar (no hay recuperación por email todavía). Se muestra una sola vez
+    acá; el admin se la pasa al jugador por fuera de la app."""
+    if pin != PIN_ENTRENADOR:
+        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+    clave_nueva = secrets.token_urlsafe(6)  # ej: "kQ3f8pXa", fácil de dictar/copiar
+    with conn() as c:
+        fila = c.execute(
+            "UPDATE jugadores SET password_hash=%s WHERE id=%s RETURNING nombre",
+            (hash_password(clave_nueva), jugador_id),
+        ).fetchone()
+    if not fila:
+        return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
+    return {"ok": True, "nombre": fila["nombre"], "clave_nueva": clave_nueva}
 
 
 # ===========================================================================
@@ -1341,7 +1361,7 @@ PAGINA_ADMIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
   <p class="ayuda" id="msg"></p>
 </div>
 <div class="tabla-wrap"><table id="tabla">
-<thead><tr><th>Nombre</th><th>Posición</th><th>Estado</th><th></th></tr></thead>
+<thead><tr><th>Nombre</th><th>Posición</th><th>Estado</th><th></th><th></th></tr></thead>
 <tbody></tbody></table></div>
 </div>
 <script>
@@ -1360,7 +1380,11 @@ function cargar(){{
       const btn = j.activo
         ? '<button class="btn" onclick="estado('+j.id+',0)">Dar de baja</button>'
         : '<button class="btn btn-p" onclick="estado('+j.id+',1)">Reactivar</button>';
-      tr.innerHTML='<td><b>'+j.nombre+'</b></td><td>'+(j.posicion||'—')+'</td><td>'+estado+'</td><td>'+btn+'</td>';
+      const nombreEsc = j.nombre.replace(/'/g, "\\\\'");
+      const btnClave = j.email
+        ? '<button class="btn" onclick="resetearClave('+j.id+',\\''+nombreEsc+'\\')">Resetear clave</button>'
+        : '<span class="sub">sin cuenta</span>';
+      tr.innerHTML='<td><b>'+j.nombre+'</b></td><td>'+(j.posicion||'—')+'</td><td>'+estado+'</td><td>'+btn+'</td><td>'+btnClave+'</td>';
       tb.appendChild(tr);
     }});
   }});
@@ -1368,6 +1392,14 @@ function cargar(){{
 function estado(id,activo){{
   const fd=new FormData(); fd.append('pin',pin); fd.append('jugador_id',id); fd.append('activo',activo);
   fetch('/admin/estado',{{method:'POST',body:fd}}).then(()=>cargar());
+}}
+function resetearClave(id,nombre){{
+  if(!confirm('¿Resetear la clave de '+nombre+'? La contraseña anterior deja de funcionar.')) return;
+  const fd=new FormData(); fd.append('pin',pin); fd.append('jugador_id',id);
+  fetch('/admin/resetear_clave',{{method:'POST',body:fd}}).then(r=>r.json()).then(res=>{{
+    if(res.error){{ alert('Error: '+res.error); return; }}
+    alert('Nueva clave de '+res.nombre+':\\n\\n'+res.clave_nueva+'\\n\\nPasásela ahora, no queda guardada en ningún lado.');
+  }});
 }}
 document.getElementById('btnAdd').onclick=function(){{
   const nombre=document.getElementById('nombre').value;
