@@ -47,7 +47,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from metrics import acwr_de, carga, readiness
+from metrics import acwr_de, carga, clamp, readiness
 
 # ---------------------------------------------------------------------------
 # Configuración: credenciales desde .env (NUNCA en el código)
@@ -256,6 +256,23 @@ def registrar(
         return RedirectResponse("/login", status_code=303)
     if not csrf_valido(request, csrf_token):
         return HTMLResponse("Sesión expirada. Volvé a cargar la página e intentá de nuevo.", status_code=403)
+
+    try:
+        fecha_dt = datetime.strptime(fecha, "%Y-%m-%d").date()
+    except ValueError:
+        return HTMLResponse("Fecha inválida.", status_code=400)
+    if fecha_dt > date.today():
+        return HTMLResponse("No podés cargar una fecha futura.", status_code=400)
+
+    # Ajustamos valores fuera de rango en vez de rechazar el envío: un typo
+    # (ej. rpe=99) no debería tirarle un error al jugador, se corrige solo.
+    entreno = 1 if entreno else 0
+    rpe = clamp(rpe, 0, 10)
+    minutos = clamp(minutos, 0, 600)
+    fatiga = clamp(fatiga, 1, 5)
+    sueno = clamp(sueno, 0, 24)
+    rutina_ok = 1 if rutina_ok else 0
+
     with conn() as c:
         # Upsert: un registro por jugador por día (si repite, actualiza)
         c.execute(
@@ -666,11 +683,11 @@ PAGINA_JUGADOR = """<!doctype html>
       <div class="par" style="margin-top:18px">
         <div class="campo" style="margin:0">
           <label for="minutos">Minutos</label>
-          <input type="number" id="minutos" name="minutos" min="0" value="0" inputmode="numeric">
+          <input type="number" id="minutos" name="minutos" min="0" max="600" value="0" inputmode="numeric">
         </div>
         <div class="campo" style="margin:0">
           <label for="sueno">Horas de sueño</label>
-          <input type="number" id="sueno" name="sueno" step="0.5" min="0" value="8" inputmode="decimal">
+          <input type="number" id="sueno" name="sueno" step="0.5" min="0" max="24" value="8" inputmode="decimal">
         </div>
       </div>
       <div class="campo" style="margin-top:18px">

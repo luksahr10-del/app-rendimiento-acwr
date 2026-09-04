@@ -1,6 +1,18 @@
 from datetime import date, timedelta
 
-from metrics import acwr_de, carga, readiness
+from metrics import acwr_de, carga, clamp, readiness
+
+
+def test_clamp_dentro_del_rango():
+    assert clamp(5, 0, 10) == 5
+
+
+def test_clamp_por_encima_del_maximo():
+    assert clamp(999, 0, 10) == 10
+
+
+def test_clamp_por_debajo_del_minimo():
+    assert clamp(-5, 1, 5) == 1
 
 
 def test_carga_basica():

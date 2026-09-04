@@ -6,6 +6,11 @@ así se pueden testear directo sin necesitar un Postgres corriendo.
 from datetime import timedelta
 
 
+def clamp(v, lo, hi):
+    """Ajusta v al rango [lo, hi] en vez de rechazarlo (ver /registrar en main.py)."""
+    return max(lo, min(hi, v))
+
+
 def carga(rpe, minutos):
     """Carga de la sesión = RPE x minutos (session-RPE, estándar del rubro)."""
     return (rpe or 0) * (minutos or 0)
