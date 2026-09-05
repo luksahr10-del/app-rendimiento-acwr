@@ -32,6 +32,7 @@ import csv
 import html
 import io
 import os
+import re
 import secrets
 import time
 from collections import defaultdict
@@ -212,6 +213,35 @@ def init_db():
                 UNIQUE (jugador_id, fecha)
             )
         """)
+        # Rutina de entrenamiento: una por jugador, con bloques (Calentamiento,
+        # Bloque principal, etc.) y dentro de cada bloque varios ejercicios.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS rutinas (
+                id SERIAL PRIMARY KEY,
+                jugador_id INTEGER UNIQUE NOT NULL REFERENCES jugadores (id),
+                actualizado TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS bloques (
+                id SERIAL PRIMARY KEY,
+                rutina_id INTEGER NOT NULL REFERENCES rutinas (id) ON DELETE CASCADE,
+                orden INTEGER NOT NULL,
+                nombre TEXT NOT NULL,
+                minutos INTEGER
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ejercicios (
+                id SERIAL PRIMARY KEY,
+                bloque_id INTEGER NOT NULL REFERENCES bloques (id) ON DELETE CASCADE,
+                orden INTEGER NOT NULL,
+                actividad TEXT NOT NULL,
+                dosificacion TEXT DEFAULT '',
+                clave TEXT DEFAULT '',
+                youtube_url TEXT DEFAULT ''
+            )
+        """)
 
 
 init_db()
@@ -283,6 +313,44 @@ def datos_jugador(jid):
         "readiness_actual": serie[-1]["readiness"] if serie else None,
         "alertas": alertas,
     }
+
+
+_YOUTUBE_RE = re.compile(
+    r"^https://(www\.)?(youtube\.com/(watch\?v=|shorts/)|youtu\.be/)[\w-]+"
+)
+
+
+def youtube_valida(url: str) -> bool:
+    """El link es opcional (vacío es válido); si hay algo, tiene que ser YouTube
+    de verdad, para no guardar cualquier URL como si fuera técnica del ejercicio."""
+    return not url or bool(_YOUTUBE_RE.match(url.strip()))
+
+
+def obtener_rutina(jid: int):
+    """Rutina completa de un jugador (bloques + ejercicios, en orden) o None
+    si todavía no tiene una cargada."""
+    with conn() as c:
+        r = c.execute("SELECT * FROM rutinas WHERE jugador_id=%s", (jid,)).fetchone()
+        if not r:
+            return None
+        bloques = c.execute(
+            "SELECT * FROM bloques WHERE rutina_id=%s ORDER BY orden", (r["id"],)
+        ).fetchall()
+        resultado = []
+        for b in bloques:
+            ejercicios = c.execute(
+                "SELECT * FROM ejercicios WHERE bloque_id=%s ORDER BY orden", (b["id"],)
+            ).fetchall()
+            resultado.append({
+                "nombre": b["nombre"],
+                "minutos": b["minutos"],
+                "ejercicios": [
+                    {"actividad": e["actividad"], "dosificacion": e["dosificacion"],
+                     "clave": e["clave"], "youtube_url": e["youtube_url"]}
+                    for e in ejercicios
+                ],
+            })
+    return {"actualizado": r["actualizado"], "bloques": resultado}
 
 
 # ===========================================================================
@@ -695,6 +763,118 @@ def admin_resetear_clave(pin: str = Form(...), jugador_id: int = Form(...)):
 
 
 # ===========================================================================
+#  RUTAS — RUTINA DE ENTRENAMIENTO (el entrenador la carga, el jugador la ve)
+# ===========================================================================
+@app.get("/entrenador/rutina/{jid}", response_class=HTMLResponse)
+def rutina_editor(jid: int, request: Request):
+    if not entrenador_logueado(request):
+        return RedirectResponse("/entrenador/login", status_code=303)
+    return HTMLResponse(
+        PAGINA_RUTINA_EDITAR.replace("{{JID}}", str(jid)).replace("{{CSRF}}", generar_csrf(request))
+    )
+
+
+@app.get("/api/rutina/{jid}")
+def api_rutina_obtener(jid: int, request: Request):
+    if not entrenador_logueado(request):
+        return JSONResponse({"error": "No autenticado"}, status_code=403)
+    with conn() as c:
+        j = c.execute("SELECT nombre FROM jugadores WHERE id=%s", (jid,)).fetchone()
+    if not j:
+        return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
+    rutina = obtener_rutina(jid) or {"bloques": []}
+    rutina["jugador_nombre"] = j["nombre"]
+    return rutina
+
+
+@app.post("/api/rutina/{jid}")
+async def api_rutina_guardar(jid: int, request: Request):
+    if not entrenador_logueado(request):
+        return JSONResponse({"error": "No autenticado"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "JSON inválido"}, status_code=400)
+    if not csrf_valido(request, body.get("csrf_token", "")):
+        return JSONResponse(
+            {"error": "Sesión expirada. Recargá la página e intentá de nuevo."}, status_code=403
+        )
+
+    bloques_in = body.get("bloques")
+    if not isinstance(bloques_in, list):
+        return JSONResponse({"error": "Formato inválido"}, status_code=400)
+
+    bloques_limpios = []
+    for b in bloques_in:
+        if not isinstance(b, dict):
+            return JSONResponse({"error": "Formato inválido"}, status_code=400)
+        nombre = str(b.get("nombre", "")).strip()
+        if not nombre:
+            continue  # bloque sin nombre: se descarta en vez de rechazar todo el guardado
+        try:
+            minutos = int(b["minutos"]) if b.get("minutos") not in (None, "") else None
+        except (TypeError, ValueError):
+            minutos = None
+        if minutos is not None:
+            minutos = clamp(minutos, 0, 240)
+        ejercicios_limpios = []
+        for e in b.get("ejercicios") or []:
+            if not isinstance(e, dict):
+                continue
+            actividad = str(e.get("actividad", "")).strip()
+            if not actividad:
+                continue  # ejercicio sin nombre: se descarta
+            youtube_url = str(e.get("youtube_url", "")).strip()
+            if not youtube_valida(youtube_url):
+                return JSONResponse(
+                    {"error": f'Link de YouTube inválido en "{actividad}". '
+                              "Tiene que ser un link de youtube.com o youtu.be."},
+                    status_code=400,
+                )
+            ejercicios_limpios.append({
+                "actividad": actividad,
+                "dosificacion": str(e.get("dosificacion", "")).strip(),
+                "clave": str(e.get("clave", "")).strip(),
+                "youtube_url": youtube_url,
+            })
+        bloques_limpios.append({"nombre": nombre, "minutos": minutos, "ejercicios": ejercicios_limpios})
+
+    with conn() as c:
+        j = c.execute("SELECT id FROM jugadores WHERE id=%s", (jid,)).fetchone()
+        if not j:
+            return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
+        fila_r = c.execute(
+            """INSERT INTO rutinas (jugador_id, actualizado) VALUES (%s,%s)
+               ON CONFLICT (jugador_id) DO UPDATE SET actualizado=EXCLUDED.actualizado
+               RETURNING id""",
+            (jid, datetime.now().isoformat(timespec="seconds")),
+        ).fetchone()
+        rutina_id = fila_r["id"]
+        c.execute("DELETE FROM bloques WHERE rutina_id=%s", (rutina_id,))
+        for i, b in enumerate(bloques_limpios):
+            fila_b = c.execute(
+                "INSERT INTO bloques (rutina_id, orden, nombre, minutos) VALUES (%s,%s,%s,%s) RETURNING id",
+                (rutina_id, i, b["nombre"], b["minutos"]),
+            ).fetchone()
+            for k, e in enumerate(b["ejercicios"]):
+                c.execute(
+                    """INSERT INTO ejercicios (bloque_id, orden, actividad, dosificacion, clave, youtube_url)
+                       VALUES (%s,%s,%s,%s,%s,%s)""",
+                    (fila_b["id"], k, e["actividad"], e["dosificacion"], e["clave"], e["youtube_url"]),
+                )
+    return {"ok": True}
+
+
+@app.get("/mi-rutina", response_class=HTMLResponse)
+def mi_rutina(request: Request):
+    j = jugador_logueado(request)
+    if not j:
+        return RedirectResponse("/login", status_code=303)
+    rutina = obtener_rutina(j["id"])
+    return HTMLResponse(_pagina_mi_rutina(j["nombre"], rutina))
+
+
+# ===========================================================================
 #  ESTILO COMPARTIDO
 # ===========================================================================
 ESTILO = """
@@ -845,6 +1025,7 @@ PAGINA_JUGADOR = """<!doctype html>
         <span class="mono" style="display:none">C</span>
       </div>
       <div class="wordmark">COREY STRENGTH<small>RENDIMIENTO</small></div>
+      <a href="/mi-rutina" class="salir">Mi rutina</a>
       <a href="/logout" class="salir">Salir</a>
     </div>
     <h1>Hola, {{NOMBRE}}</h1>
@@ -1289,7 +1470,7 @@ PAGINA_FICHA = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 </div>
 <script>
 const jid = location.pathname.split('/').pop();
-document.getElementById('nav').innerHTML = `<a href="/panel">← Volver al panel</a>`;
+document.getElementById('nav').innerHTML = `<a href="/panel">← Volver al panel</a><a href="/entrenador/rutina/${{jid}}">Editar rutina →</a>`;
 
 function dibujar(id, valores, color, opt){{
   opt = opt||{{}};
@@ -1418,3 +1599,229 @@ document.getElementById('btnAdd').onclick=function(){{
 }};
 cargar();
 </script></body></html>"""
+
+# ===========================================================================
+#  RUTINA DE ENTRENAMIENTO — páginas
+# ===========================================================================
+PAGINA_RUTINA_EDITAR = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rutina — Jugador</title>""" + ESTILO + """
+<style>
+  .bloque-card{background:#fff;border:1px solid var(--linea);border-radius:14px;
+    padding:16px;margin-bottom:14px}
+  .bloque-head{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+  .bloque-head input[type="text"]{flex:1;min-width:160px}
+  .bloque-head input[type="number"]{width:90px}
+  .fila-ejercicio{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr auto;
+    gap:8px;margin-bottom:8px;align-items:center}
+  .fila-ejercicio input{padding:9px 10px;border:1px solid var(--linea);border-radius:8px;
+    font-size:.88rem;font-family:inherit;width:100%}
+  .fila-cabecera{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr auto;
+    gap:8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;
+    color:var(--gris);margin-bottom:6px}
+  .quitar{background:none;border:0;color:var(--rojo);cursor:pointer;font-size:1.1rem;
+    padding:4px 8px}
+  .agregar-ejercicio{background:none;border:1px dashed var(--linea);border-radius:8px;
+    color:var(--acento2);font-weight:600;padding:8px 12px;cursor:pointer;font-size:.85rem;
+    margin-top:4px}
+  .quitar-bloque{background:none;border:0;color:var(--rojo);cursor:pointer;
+    font-weight:600;font-size:.85rem;flex:none}
+  .agregar-bloque{width:100%;padding:14px;border:2px dashed var(--linea);border-radius:14px;
+    background:none;color:var(--gris);font-weight:700;cursor:pointer;margin-bottom:16px}
+  .barra-guardar{position:sticky;bottom:0;background:#fff;padding:14px 0;
+    border-top:1px solid var(--linea);margin-top:8px}
+  .msg-ok{background:#e2f4ec;color:var(--ok);padding:10px 12px;border-radius:10px;
+    font-size:.86rem;margin-bottom:10px}
+  @media (max-width:640px){
+    .fila-ejercicio,.fila-cabecera{grid-template-columns:1fr;gap:4px}
+    .fila-cabecera{display:none}
+  }
+</style></head>
+<body><div class="wrap wide">
+<div class="nav"><a href="/jugador/{{JID}}">← Volver a la ficha</a></div>
+<header class="top"><div class="bola">🏋️</div>
+<div><h1 id="nombre">Rutina</h1><p class="sub">Bloques, minutos, actividad, dosificación y clave técnica</p></div></header>
+<div id="mensaje"></div>
+<div id="bloques"></div>
+<button type="button" class="agregar-bloque" id="agregarBloque">+ Agregar bloque</button>
+<div class="barra-guardar">
+  <button class="btn btn-p" id="guardar" style="width:100%;padding:14px;font-size:1rem">Guardar rutina</button>
+</div>
+</div>
+<script>
+const jid = "{{JID}}";
+const CSRF = "{{CSRF}}";
+let rutina = {bloques: []};
+
+function esc(s){
+  return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function render(){
+  const cont = document.getElementById('bloques');
+  if(!rutina.bloques.length){
+    cont.innerHTML = '<p class="sub">Todavía no hay bloques. Agregá el primero.</p>';
+    return;
+  }
+  cont.innerHTML = rutina.bloques.map((b, bi) => `
+    <div class="bloque-card">
+      <div class="bloque-head">
+        <input type="text" placeholder="Nombre del bloque (ej: Calentamiento)"
+          value="${esc(b.nombre)}" data-b="${bi}" class="in-bloque-nombre">
+        <input type="number" placeholder="Min." min="0" max="240"
+          value="${b.minutos==null?'':b.minutos}" data-b="${bi}" class="in-bloque-min">
+        <button type="button" class="quitar-bloque" data-b="${bi}">✕ Quitar bloque</button>
+      </div>
+      <div class="fila-cabecera">
+        <div>Actividad</div><div>Dosificación</div><div>Clave</div><div>Link de YouTube</div><div></div>
+      </div>
+      ${b.ejercicios.map((e, ei) => `
+        <div class="fila-ejercicio">
+          <input type="text" placeholder="Actividad" value="${esc(e.actividad)}"
+            data-b="${bi}" data-e="${ei}" class="in-actividad">
+          <input type="text" placeholder="Ej: 3 × 10" value="${esc(e.dosificacion)}"
+            data-b="${bi}" data-e="${ei}" class="in-dosificacion">
+          <input type="text" placeholder="Clave técnica" value="${esc(e.clave)}"
+            data-b="${bi}" data-e="${ei}" class="in-clave">
+          <input type="url" placeholder="https://youtube.com/..." value="${esc(e.youtube_url)}"
+            data-b="${bi}" data-e="${ei}" class="in-youtube">
+          <button type="button" class="quitar" data-b="${bi}" data-e="${ei}" title="Quitar ejercicio">✕</button>
+        </div>`).join('')}
+      <button type="button" class="agregar-ejercicio" data-b="${bi}">+ Agregar ejercicio</button>
+    </div>`).join('');
+}
+
+document.getElementById('bloques').addEventListener('input', e => {
+  const t = e.target, bi = t.dataset.b, ei = t.dataset.e;
+  if(bi===undefined) return;
+  const b = rutina.bloques[bi];
+  if(!b) return;
+  if(t.classList.contains('in-bloque-nombre')) b.nombre = t.value;
+  else if(t.classList.contains('in-bloque-min')) b.minutos = t.value===''?null:parseInt(t.value,10);
+  else if(ei!==undefined && b.ejercicios[ei]){
+    const ej = b.ejercicios[ei];
+    if(t.classList.contains('in-actividad')) ej.actividad = t.value;
+    else if(t.classList.contains('in-dosificacion')) ej.dosificacion = t.value;
+    else if(t.classList.contains('in-clave')) ej.clave = t.value;
+    else if(t.classList.contains('in-youtube')) ej.youtube_url = t.value;
+  }
+});
+
+document.getElementById('bloques').addEventListener('click', e => {
+  const t = e.target;
+  if(t.classList.contains('quitar-bloque')){
+    rutina.bloques.splice(parseInt(t.dataset.b,10), 1);
+    render();
+  } else if(t.classList.contains('agregar-ejercicio')){
+    rutina.bloques[parseInt(t.dataset.b,10)].ejercicios.push(
+      {actividad:'', dosificacion:'', clave:'', youtube_url:''});
+    render();
+  } else if(t.classList.contains('quitar')){
+    rutina.bloques[parseInt(t.dataset.b,10)].ejercicios.splice(parseInt(t.dataset.e,10), 1);
+    render();
+  }
+});
+
+document.getElementById('agregarBloque').onclick = () => {
+  rutina.bloques.push({nombre:'', minutos:null, ejercicios:[]});
+  render();
+};
+
+document.getElementById('guardar').onclick = () => {
+  const msg = document.getElementById('mensaje');
+  msg.innerHTML = '';
+  fetch('/api/rutina/'+jid, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({csrf_token: CSRF, bloques: rutina.bloques}),
+  }).then(r => r.json()).then(d => {
+    if(d.error){
+      msg.innerHTML = '<div class="alerta">'+esc(d.error)+'</div>';
+    } else {
+      msg.innerHTML = '<div class="msg-ok">Rutina guardada ✅</div>';
+      cargar();
+    }
+  }).catch(() => { msg.innerHTML = '<div class="alerta">No se pudo guardar. Probá de nuevo.</div>'; });
+};
+
+function cargar(){
+  fetch('/api/rutina/'+jid).then(r => {
+    if(r.status===403){ location.href='/entrenador/login'; throw new Error('no autenticado'); }
+    return r.json();
+  }).then(d => {
+    if(d.error){
+      document.body.innerHTML = '<div class="wrap"><p>Error: '+esc(d.error)+'</p></div>';
+      return;
+    }
+    document.getElementById('nombre').textContent = 'Rutina de ' + d.jugador_nombre;
+    rutina = {bloques: (d.bloques||[]).map(b => ({
+      nombre: b.nombre, minutos: b.minutos,
+      ejercicios: (b.ejercicios||[]).map(e => ({
+        actividad: e.actividad, dosificacion: e.dosificacion,
+        clave: e.clave, youtube_url: e.youtube_url,
+      })),
+    }))};
+    render();
+  });
+}
+cargar();
+</script>
+</body></html>"""
+
+PAGINA_MI_RUTINA_BASE = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mi rutina</title>""" + ESTILO + """
+<style>
+  body{background:#f6f7fb}
+  .bloque{background:#fff;border:1px solid var(--linea);border-radius:14px;
+    overflow:hidden;margin-bottom:16px}
+  .bloque-head{background:var(--tinta);color:#fff;padding:12px 16px;
+    display:flex;justify-content:space-between;align-items:center;font-weight:700}
+  .bloque-head .min{font-weight:600;font-size:.85rem;opacity:.85}
+  .ver-tecnica{color:var(--acento2);font-weight:700;text-decoration:none;font-size:.85rem;
+    white-space:nowrap}
+</style></head>
+<body><div class="wrap wide">
+<div class="nav"><a href="/">← Volver a mi día</a></div>
+<header class="top"><div class="bola">🏋️</div>
+<div><h1>Mi rutina</h1><p class="sub">{{NOMBRE}}</p></div></header>
+{{CONTENIDO}}
+</div></body></html>"""
+
+
+def _pagina_mi_rutina(nombre_jugador, rutina):
+    if not rutina or not rutina["bloques"]:
+        contenido = '<p class="sub">Todavía no tenés una rutina cargada. Consultá con tu entrenador.</p>'
+    else:
+        partes = []
+        for b in rutina["bloques"]:
+            filas = []
+            for e in b["ejercicios"]:
+                if e["youtube_url"]:
+                    link = (
+                        f'<a href="{html.escape(e["youtube_url"])}" target="_blank" '
+                        f'rel="noopener noreferrer" class="ver-tecnica">▶ Ver técnica</a>'
+                    )
+                else:
+                    link = "—"
+                filas.append(
+                    "<tr><td>" + html.escape(e["actividad"]) + "</td>"
+                    "<td>" + html.escape(e["dosificacion"] or "—") + "</td>"
+                    "<td>" + html.escape(e["clave"] or "—") + "</td>"
+                    "<td>" + link + "</td></tr>"
+                )
+            minutos = f'{b["minutos"]} min' if b["minutos"] else ""
+            partes.append(
+                '<div class="bloque"><div class="bloque-head"><span>'
+                + html.escape(b["nombre"]) + '</span><span class="min">' + minutos + "</span></div>"
+                '<div class="tabla-wrap" style="border:0;border-radius:0"><table>'
+                "<thead><tr><th>Actividad</th><th>Dosificación</th><th>Clave</th><th>Técnica</th></tr></thead>"
+                "<tbody>" + "".join(filas) + "</tbody></table></div></div>"
+            )
+        contenido = "".join(partes)
+    return PAGINA_MI_RUTINA_BASE.replace("{{NOMBRE}}", html.escape(nombre_jugador)).replace(
+        "{{CONTENIDO}}", contenido
+    )
