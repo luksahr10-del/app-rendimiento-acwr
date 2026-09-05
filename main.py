@@ -222,12 +222,12 @@ def init_db():
         # tiramos las tablas viejas y las recreamos con la forma nueva. No
         # vuelve a correr una vez migrado (a partir de ahí "sesiones" ya
         # existe, así que esta rama nunca se repite).
-        c.execute("""
+        existe_sesiones = c.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables WHERE table_name = 'sesiones'
             )
-        """)
-        if not c.fetchone()["exists"]:
+        """).fetchone()
+        if not existe_sesiones["exists"]:
             c.execute("DROP TABLE IF EXISTS ejercicios")
             c.execute("DROP TABLE IF EXISTS bloques")
             c.execute("DROP TABLE IF EXISTS rutinas")
