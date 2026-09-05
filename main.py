@@ -2043,10 +2043,21 @@ PAGINA_MI_RUTINA_BASE = """<!doctype html>
 </div></body></html>"""
 
 
+_DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+             "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def _fecha_larga_es(d) -> str:
+    """'sábado 05 de septiembre', sin depender del locale del servidor
+    (Render no tiene configurado es_AR, así que strftime da nombres en inglés)."""
+    return f"{_DIAS_ES[d.weekday()]} {d.day:02d} de {_MESES_ES[d.month - 1]}"
+
+
 def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
     fecha_ant = (fecha_dt - timedelta(days=1)).isoformat()
     fecha_sig = (fecha_dt + timedelta(days=1)).isoformat()
-    fecha_larga = fecha_dt.strftime("%A %d de %B")
+    fecha_larga = _fecha_larga_es(fecha_dt)
     nav = (
         '<div class="sesion-nav">'
         f'<a href="/mi-rutina?fecha={fecha_ant}">‹ Día anterior</a>'
