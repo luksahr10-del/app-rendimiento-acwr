@@ -1058,7 +1058,7 @@ PAGINA_LOGIN = f"""<!doctype html>
 <title>Corey Strength · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <a href="/" class="volver">‹ Volver</a>
-  <div class="marca">COREY STRENGTH<small>Club de básquetbol</small></div>
+  <div class="marca">COREY STRENGTH</div>
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
     <p class="sub">Ingresa para cargar tu día</p>
@@ -1081,7 +1081,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
 <title>Corey Strength · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <a href="/" class="volver">‹ Volver</a>
-  <div class="marca">COREY STRENGTH<small>Club de básquetbol</small></div>
+  <div class="marca">COREY STRENGTH</div>
   <div class="card">
     <h1>Crea tu cuenta</h1>
     <p class="sub">Para registrar tu día a día</p>
