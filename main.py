@@ -263,10 +263,12 @@ def init_db():
                 orden INTEGER NOT NULL,
                 actividad TEXT NOT NULL,
                 dosificacion TEXT DEFAULT '',
+                descanso TEXT DEFAULT '',
                 clave TEXT DEFAULT '',
                 youtube_url TEXT DEFAULT ''
             )
         """)
+        c.execute("ALTER TABLE ejercicios ADD COLUMN IF NOT EXISTS descanso TEXT DEFAULT ''")
 
 
 init_db()
@@ -374,7 +376,7 @@ def obtener_sesion(jid: int, fecha: str):
                 "minutos": b["minutos"],
                 "ejercicios": [
                     {"actividad": e["actividad"], "dosificacion": e["dosificacion"],
-                     "clave": e["clave"], "youtube_url": e["youtube_url"]}
+                     "descanso": e["descanso"], "clave": e["clave"], "youtube_url": e["youtube_url"]}
                     for e in ejercicios
                 ],
             })
@@ -937,6 +939,7 @@ async def api_rutina_guardar(jid: int, request: Request):
             ejercicios_limpios.append({
                 "actividad": actividad,
                 "dosificacion": str(e.get("dosificacion", "")).strip(),
+                "descanso": str(e.get("descanso", "")).strip(),
                 "clave": str(e.get("clave", "")).strip(),
                 "youtube_url": youtube_url,
             })
@@ -967,9 +970,11 @@ async def api_rutina_guardar(jid: int, request: Request):
             ).fetchone()
             for k, e in enumerate(b["ejercicios"]):
                 c.execute(
-                    """INSERT INTO ejercicios (bloque_id, orden, actividad, dosificacion, clave, youtube_url)
-                       VALUES (%s,%s,%s,%s,%s,%s)""",
-                    (fila_b["id"], k, e["actividad"], e["dosificacion"], e["clave"], e["youtube_url"]),
+                    """INSERT INTO ejercicios
+                       (bloque_id, orden, actividad, dosificacion, descanso, clave, youtube_url)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                    (fila_b["id"], k, e["actividad"], e["dosificacion"], e["descanso"],
+                     e["clave"], e["youtube_url"]),
                 )
     return {"ok": True}
 
@@ -1784,12 +1789,12 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
   .bloque-head{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
   .bloque-head input[type="text"]{flex:1;min-width:160px}
   .bloque-head input[type="number"]{width:90px}
-  .fila-ejercicio{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr auto;
+  .fila-ejercicio{display:grid;grid-template-columns:1.2fr .8fr .7fr .9fr 1.1fr auto;
     gap:8px;margin-bottom:8px;align-items:center}
   .fila-ejercicio input{padding:9px 10px;border:1px solid var(--linea);border-radius:8px;
     font-size:.88rem;font-family:inherit;width:100%}
   .etiqueta-movil{display:none}
-  .fila-cabecera{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr auto;
+  .fila-cabecera{display:grid;grid-template-columns:1.2fr .8fr .7fr .9fr 1.1fr auto;
     gap:8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;
     color:var(--gris);margin-bottom:6px}
   .quitar{background:none;border:0;color:var(--rojo);cursor:pointer;font-size:1.1rem;
@@ -1884,7 +1889,7 @@ function render(){
         <button type="button" class="quitar-bloque" data-b="${bi}">✕ Quitar bloque</button>
       </div>
       <div class="fila-cabecera">
-        <div>Actividad</div><div>Dosificación</div><div>Clave</div><div>Link de YouTube</div><div></div>
+        <div>Actividad</div><div>Dosificación</div><div>Descanso</div><div>Clave</div><div>Link de YouTube</div><div></div>
       </div>
       ${b.ejercicios.map((e, ei) => `
         <div class="fila-ejercicio">
@@ -1892,6 +1897,8 @@ function render(){
             data-b="${bi}" data-e="${ei}" class="in-actividad"></div>
           <div class="campo-ej"><span class="etiqueta-movil">Dosificación</span><input type="text" placeholder="Ej: 3 × 10" value="${esc(e.dosificacion)}"
             data-b="${bi}" data-e="${ei}" class="in-dosificacion"></div>
+          <div class="campo-ej"><span class="etiqueta-movil">Descanso</span><input type="text" placeholder="Ej: 90 s" value="${esc(e.descanso)}"
+            data-b="${bi}" data-e="${ei}" class="in-descanso"></div>
           <div class="campo-ej"><span class="etiqueta-movil">Clave</span><input type="text" placeholder="Clave técnica" value="${esc(e.clave)}"
             data-b="${bi}" data-e="${ei}" class="in-clave"></div>
           <div class="campo-ej"><span class="etiqueta-movil">Link de YouTube (técnica)</span><input type="url" placeholder="https://youtube.com/..." value="${esc(e.youtube_url)}"
@@ -1913,6 +1920,7 @@ document.getElementById('bloques').addEventListener('input', e => {
     const ej = b.ejercicios[ei];
     if(t.classList.contains('in-actividad')) ej.actividad = t.value;
     else if(t.classList.contains('in-dosificacion')) ej.dosificacion = t.value;
+    else if(t.classList.contains('in-descanso')) ej.descanso = t.value;
     else if(t.classList.contains('in-clave')) ej.clave = t.value;
     else if(t.classList.contains('in-youtube')) ej.youtube_url = t.value;
   }
@@ -1925,7 +1933,7 @@ document.getElementById('bloques').addEventListener('click', e => {
     render();
   } else if(t.classList.contains('agregar-ejercicio')){
     rutina.bloques[parseInt(t.dataset.b,10)].ejercicios.push(
-      {actividad:'', dosificacion:'', clave:'', youtube_url:''});
+      {actividad:'', dosificacion:'', descanso:'', clave:'', youtube_url:''});
     render();
   } else if(t.classList.contains('quitar')){
     rutina.bloques[parseInt(t.dataset.b,10)].ejercicios.splice(parseInt(t.dataset.e,10), 1);
@@ -1993,7 +2001,7 @@ function cargar(){
     rutina = {bloques: (d.bloques||[]).map(b => ({
       nombre: b.nombre, minutos: b.minutos,
       ejercicios: (b.ejercicios||[]).map(e => ({
-        actividad: e.actividad, dosificacion: e.dosificacion,
+        actividad: e.actividad, dosificacion: e.dosificacion, descanso: e.descanso,
         clave: e.clave, youtube_url: e.youtube_url,
       })),
     }))};
@@ -2116,6 +2124,7 @@ def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
             filas.append(
                 "<tr><td>" + html.escape(e["actividad"]) + "</td>"
                 "<td>" + html.escape(e["dosificacion"] or "—") + "</td>"
+                "<td>" + html.escape(e["descanso"] or "—") + "</td>"
                 "<td>" + html.escape(e["clave"] or "—") + "</td>"
                 "<td>" + link + "</td></tr>"
             )
@@ -2124,7 +2133,8 @@ def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
             '<div class="bloque"><div class="bloque-head"><span>'
             + html.escape(b["nombre"]) + '</span><span class="min">' + minutos + "</span></div>"
             '<div class="tabla-wrap" style="border:0;border-radius:0"><table>'
-            "<thead><tr><th>Actividad</th><th>Dosificación</th><th>Clave</th><th>Técnica</th></tr></thead>"
+            "<thead><tr><th>Actividad</th><th>Dosificación</th><th>Descanso</th>"
+            "<th>Clave</th><th>Técnica</th></tr></thead>"
             "<tbody>" + "".join(filas) + "</tbody></table></div></div>"
         )
 
