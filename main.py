@@ -762,6 +762,22 @@ def admin_resetear_clave(pin: str = Form(...), jugador_id: int = Form(...)):
     return {"ok": True, "nombre": fila["nombre"], "clave_nueva": clave_nueva}
 
 
+@app.post("/admin/entrenador/borrar")
+def admin_entrenador_borrar(pin: str = Form(...), email: str = Form(...)):
+    """Borra una cuenta de entrenador (ej: una cuenta de prueba, o alguien que
+    dejó el cuerpo técnico). No hay interfaz para esto todavía, se llama
+    directo a la API con el PIN."""
+    if pin != PIN_ENTRENADOR:
+        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+    with conn() as c:
+        fila = c.execute(
+            "DELETE FROM entrenadores WHERE email=%s RETURNING nombre", (email.strip().lower(),)
+        ).fetchone()
+    if not fila:
+        return JSONResponse({"error": "No existe ese entrenador"}, status_code=404)
+    return {"ok": True, "nombre": fila["nombre"]}
+
+
 # ===========================================================================
 #  RUTAS — RUTINA DE ENTRENAMIENTO (el entrenador la carga, el jugador la ve)
 # ===========================================================================
