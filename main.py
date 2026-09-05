@@ -718,6 +718,22 @@ def api_jugadores(pin: str = ""):
     return {"jugadores": [dict(j) for j in js]}
 
 
+@app.get("/admin/entrenadores", response_class=HTMLResponse)
+def admin_entrenadores(pin: str = ""):
+    if pin != PIN_ENTRENADOR:
+        return RedirectResponse("/admin", status_code=303)
+    return PAGINA_ADMIN_ENTRENADORES
+
+
+@app.get("/api/entrenadores")
+def api_entrenadores(pin: str = ""):
+    if pin != PIN_ENTRENADOR:
+        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+    with conn() as c:
+        es = c.execute("SELECT id, nombre, email FROM entrenadores ORDER BY nombre").fetchall()
+    return {"entrenadores": [dict(e) for e in es]}
+
+
 @app.post("/admin/agregar")
 def admin_agregar(pin: str = Form(...), nombre: str = Form(...), posicion: str = Form("")):
     if pin != PIN_ENTRENADOR:
@@ -1567,7 +1583,8 @@ PAGINA_ADMIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <script>
 const pin = new URLSearchParams(location.search).get('pin');
 const P = encodeURIComponent(pin);
-document.getElementById('nav').innerHTML = '<a href="/panel">← Volver al panel</a>';
+document.getElementById('nav').innerHTML =
+  '<a href="/panel">← Volver al panel</a><a href="/admin/entrenadores?pin='+P+'">Gestionar entrenadores →</a>';
 
 function cargar(){{
   fetch('/api/jugadores?pin='+P).then(r=>r.json()).then(d=>{{
@@ -1613,6 +1630,52 @@ document.getElementById('btnAdd').onclick=function(){{
     msg.textContent='Agregado ✔'; cargar();
   }});
 }};
+cargar();
+</script></body></html>"""
+
+PAGINA_ADMIN_ENTRENADORES = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gestionar entrenadores</title>{ESTILO}</head>
+<body><div class="wrap">
+<div class="nav" id="nav"></div>
+<header class="top"><div class="bola">🧑‍🏫</div>
+<div><h1>Gestionar entrenadores</h1><p class="sub">Cuerpo técnico con acceso al panel</p></div></header>
+<div class="tabla-wrap"><table id="tabla">
+<thead><tr><th>Nombre</th><th>Email</th><th></th></tr></thead>
+<tbody></tbody></table></div>
+</div>
+<script>
+const pin = new URLSearchParams(location.search).get('pin');
+const P = encodeURIComponent(pin);
+document.getElementById('nav').innerHTML =
+  '<a href="/panel">← Volver al panel</a><a href="/admin?pin='+P+'">Gestionar jugadores →</a>';
+
+function cargar(){{
+  fetch('/api/entrenadores?pin='+P).then(r=>r.json()).then(d=>{{
+    const tb=document.querySelector('#tabla tbody'); tb.innerHTML='';
+    const lista = d.entrenadores||[];
+    if(!lista.length){{
+      tb.innerHTML='<tr><td colspan="3" class="sub">Todavía no hay entrenadores registrados.</td></tr>';
+      return;
+    }}
+    lista.forEach(e=>{{
+      const tr=document.createElement('tr');
+      const nombreEsc = e.nombre.replace(/'/g, "\\\\'");
+      const emailEsc = e.email.replace(/'/g, "\\\\'");
+      tr.innerHTML='<td><b>'+e.nombre+'</b></td><td>'+e.email+'</td>'+
+        '<td><button class="btn" onclick="borrar(\\''+emailEsc+'\\',\\''+nombreEsc+'\\')">Borrar</button></td>';
+      tb.appendChild(tr);
+    }});
+  }});
+}}
+function borrar(email,nombre){{
+  if(!confirm('¿Borrar la cuenta de '+nombre+'? No va a poder entrar más al panel.')) return;
+  const fd=new FormData(); fd.append('pin',pin); fd.append('email',email);
+  fetch('/admin/entrenador/borrar',{{method:'POST',body:fd}}).then(r=>r.json()).then(res=>{{
+    if(res.error){{ alert('Error: '+res.error); return; }}
+    cargar();
+  }});
+}}
 cargar();
 </script></body></html>"""
 
