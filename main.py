@@ -238,6 +238,7 @@ def init_db():
                 jugador_id INTEGER NOT NULL REFERENCES jugadores (id),
                 fecha TEXT NOT NULL,
                 enfoque TEXT DEFAULT '',
+                duracion_min INTEGER,
                 rpe_final TEXT DEFAULT '',
                 objetivo TEXT DEFAULT '',
                 objetivo_nota TEXT DEFAULT '',
@@ -245,6 +246,7 @@ def init_db():
                 UNIQUE (jugador_id, fecha)
             )
         """)
+        c.execute("ALTER TABLE sesiones ADD COLUMN IF NOT EXISTS duracion_min INTEGER")
         c.execute("""
             CREATE TABLE IF NOT EXISTS bloques (
                 id SERIAL PRIMARY KEY,
@@ -377,8 +379,8 @@ def obtener_sesion(jid: int, fecha: str):
                 ],
             })
     return {
-        "fecha": s["fecha"], "enfoque": s["enfoque"], "rpe_final": s["rpe_final"],
-        "objetivo": s["objetivo"], "objetivo_nota": s["objetivo_nota"],
+        "fecha": s["fecha"], "enfoque": s["enfoque"], "duracion_min": s["duracion_min"],
+        "rpe_final": s["rpe_final"], "objetivo": s["objetivo"], "objetivo_nota": s["objetivo_nota"],
         "bloques": resultado,
     }
 
@@ -864,8 +866,8 @@ def api_rutina_obtener(jid: int, request: Request, fecha: str = ""):
         return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
     fecha = fecha or date.today().isoformat()
     sesion = obtener_sesion(jid, fecha) or {
-        "fecha": fecha, "enfoque": "", "rpe_final": "", "objetivo": "",
-        "objetivo_nota": "", "bloques": [],
+        "fecha": fecha, "enfoque": "", "duracion_min": None, "rpe_final": "",
+        "objetivo": "", "objetivo_nota": "", "bloques": [],
     }
     sesion["jugador_nombre"] = j["nombre"]
     return sesion
@@ -891,6 +893,12 @@ async def api_rutina_guardar(jid: int, request: Request):
         return JSONResponse({"error": "Fecha inválida."}, status_code=400)
 
     enfoque = str(body.get("enfoque", "")).strip()
+    try:
+        duracion_min = int(body["duracion_min"]) if body.get("duracion_min") not in (None, "") else None
+    except (TypeError, ValueError):
+        duracion_min = None
+    if duracion_min is not None:
+        duracion_min = clamp(duracion_min, 0, 600)
     rpe_final = str(body.get("rpe_final", "")).strip()
     objetivo = str(body.get("objetivo", "")).strip()
     objetivo_nota = str(body.get("objetivo_nota", "")).strip()
@@ -939,14 +947,15 @@ async def api_rutina_guardar(jid: int, request: Request):
         if not j:
             return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
         fila_s = c.execute(
-            """INSERT INTO sesiones (jugador_id, fecha, enfoque, rpe_final, objetivo, objetivo_nota, actualizado)
-               VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """INSERT INTO sesiones
+               (jugador_id, fecha, enfoque, duracion_min, rpe_final, objetivo, objetivo_nota, actualizado)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (jugador_id, fecha) DO UPDATE SET
-                 enfoque=EXCLUDED.enfoque, rpe_final=EXCLUDED.rpe_final,
-                 objetivo=EXCLUDED.objetivo, objetivo_nota=EXCLUDED.objetivo_nota,
-                 actualizado=EXCLUDED.actualizado
+                 enfoque=EXCLUDED.enfoque, duracion_min=EXCLUDED.duracion_min,
+                 rpe_final=EXCLUDED.rpe_final, objetivo=EXCLUDED.objetivo,
+                 objetivo_nota=EXCLUDED.objetivo_nota, actualizado=EXCLUDED.actualizado
                RETURNING id""",
-            (jid, fecha, enfoque, rpe_final, objetivo, objetivo_nota,
+            (jid, fecha, enfoque, duracion_min, rpe_final, objetivo, objetivo_nota,
              datetime.now().isoformat(timespec="seconds")),
         ).fetchone()
         sesion_id = fila_s["id"]
@@ -1823,8 +1832,8 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
   <div class="fila-campos">
     <div><label for="rpeFinal">RPE final</label>
       <input type="text" id="rpeFinal" placeholder="Ej: 7-8/10"></div>
-    <div><label for="duracionTotal">Duración total</label>
-      <input type="text" id="duracionTotal" disabled></div>
+    <div><label for="duracionTotal">Duración total (min)</label>
+      <input type="number" id="duracionTotal" min="0" max="600" placeholder="Ej: 80"></div>
   </div>
   <div class="fila-campos">
     <div><label for="objetivo">Objetivo</label>
@@ -1844,7 +1853,7 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
 const jid = "{{JID}}";
 const CSRF = "{{CSRF}}";
 let rutina = {bloques: []};
-let sesionActual = {enfoque:'', rpe_final:'', objetivo:'', objetivo_nota:''};
+let sesionActual = {enfoque:'', duracion_min:null, rpe_final:'', objetivo:'', objetivo_nota:''};
 
 function esc(s){
   return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
@@ -1856,13 +1865,7 @@ function hoyISO(){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
-function actualizarDuracion(){
-  const total = rutina.bloques.reduce((s,b)=> s+(b.minutos||0), 0);
-  document.getElementById('duracionTotal').value = total+' min';
-}
-
 function render(){
-  actualizarDuracion();
   const cont = document.getElementById('bloques');
   if(!rutina.bloques.length){
     cont.innerHTML = '<p class="sub">Todavía no hay bloques. Agregá el primero.</p>';
@@ -1902,10 +1905,7 @@ document.getElementById('bloques').addEventListener('input', e => {
   const b = rutina.bloques[bi];
   if(!b) return;
   if(t.classList.contains('in-bloque-nombre')) b.nombre = t.value;
-  else if(t.classList.contains('in-bloque-min')){
-    b.minutos = t.value===''?null:parseInt(t.value,10);
-    actualizarDuracion();
-  }
+  else if(t.classList.contains('in-bloque-min')) b.minutos = t.value===''?null:parseInt(t.value,10);
   else if(ei!==undefined && b.ejercicios[ei]){
     const ej = b.ejercicios[ei];
     if(t.classList.contains('in-actividad')) ej.actividad = t.value;
@@ -1938,6 +1938,7 @@ document.getElementById('agregarBloque').onclick = () => {
 document.getElementById('fecha').value = hoyISO();
 document.getElementById('fecha').onchange = cargar;
 document.getElementById('enfoque').oninput = e => sesionActual.enfoque = e.target.value;
+document.getElementById('duracionTotal').oninput = e => sesionActual.duracion_min = e.target.value===''?null:parseInt(e.target.value,10);
 document.getElementById('rpeFinal').oninput = e => sesionActual.rpe_final = e.target.value;
 document.getElementById('objetivo').oninput = e => sesionActual.objetivo = e.target.value;
 document.getElementById('objetivoNota').oninput = e => sesionActual.objetivo_nota = e.target.value;
@@ -1951,7 +1952,8 @@ document.getElementById('guardar').onclick = () => {
     body: JSON.stringify({
       csrf_token: CSRF,
       fecha: document.getElementById('fecha').value,
-      enfoque: sesionActual.enfoque, rpe_final: sesionActual.rpe_final,
+      enfoque: sesionActual.enfoque, duracion_min: sesionActual.duracion_min,
+      rpe_final: sesionActual.rpe_final,
       objetivo: sesionActual.objetivo, objetivo_nota: sesionActual.objetivo_nota,
       bloques: rutina.bloques,
     }),
@@ -1977,10 +1979,11 @@ function cargar(){
     }
     document.getElementById('nombre').textContent = 'Rutina de ' + d.jugador_nombre;
     sesionActual = {
-      enfoque: d.enfoque||'', rpe_final: d.rpe_final||'',
-      objetivo: d.objetivo||'', objetivo_nota: d.objetivo_nota||'',
+      enfoque: d.enfoque||'', duracion_min: d.duracion_min==null?null:d.duracion_min,
+      rpe_final: d.rpe_final||'', objetivo: d.objetivo||'', objetivo_nota: d.objetivo_nota||'',
     };
     document.getElementById('enfoque').value = sesionActual.enfoque;
+    document.getElementById('duracionTotal').value = sesionActual.duracion_min==null?'':sesionActual.duracion_min;
     document.getElementById('rpeFinal').value = sesionActual.rpe_final;
     document.getElementById('objetivo').value = sesionActual.objetivo;
     document.getElementById('objetivoNota').value = sesionActual.objetivo_nota;
@@ -2073,7 +2076,9 @@ def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
             "{{CONTENIDO}}", contenido
         )
 
-    duracion_total = sum((b["minutos"] or 0) for b in sesion["bloques"])
+    duracion_total = sesion["duracion_min"]
+    if duracion_total is None:
+        duracion_total = sum((b["minutos"] or 0) for b in sesion["bloques"])
     primer_nombre = nombre_jugador.split(" ")[0].upper()
     titulo = f'SESIÓN {fecha_dt.strftime("%d-%m")} — {html.escape(primer_nombre)}'
     cabecera = f'<div class="sesion-titulo">{titulo}</div>'
