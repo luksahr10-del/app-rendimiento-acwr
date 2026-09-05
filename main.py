@@ -36,7 +36,7 @@ import re
 import secrets
 import time
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -213,19 +213,42 @@ def init_db():
                 UNIQUE (jugador_id, fecha)
             )
         """)
-        # Rutina de entrenamiento: una por jugador, con bloques (Calentamiento,
-        # Bloque principal, etc.) y dentro de cada bloque varios ejercicios.
+        # Rutina de entrenamiento: una sesión por jugador y día (la rutina
+        # cambia día a día), con bloques (Calentamiento, Bloque principal,
+        # etc.) y dentro de cada bloque varios ejercicios.
+        #
+        # Migración única: la primera versión de esto era "rutinas" (una
+        # sola por jugador, sin fecha). Si "sesiones" todavía no existe,
+        # tiramos las tablas viejas y las recreamos con la forma nueva. No
+        # vuelve a correr una vez migrado (a partir de ahí "sesiones" ya
+        # existe, así que esta rama nunca se repite).
         c.execute("""
-            CREATE TABLE IF NOT EXISTS rutinas (
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables WHERE table_name = 'sesiones'
+            )
+        """)
+        if not c.fetchone()["exists"]:
+            c.execute("DROP TABLE IF EXISTS ejercicios")
+            c.execute("DROP TABLE IF EXISTS bloques")
+            c.execute("DROP TABLE IF EXISTS rutinas")
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS sesiones (
                 id SERIAL PRIMARY KEY,
-                jugador_id INTEGER UNIQUE NOT NULL REFERENCES jugadores (id),
-                actualizado TEXT NOT NULL
+                jugador_id INTEGER NOT NULL REFERENCES jugadores (id),
+                fecha TEXT NOT NULL,
+                enfoque TEXT DEFAULT '',
+                rpe_final TEXT DEFAULT '',
+                objetivo TEXT DEFAULT '',
+                objetivo_nota TEXT DEFAULT '',
+                actualizado TEXT NOT NULL,
+                UNIQUE (jugador_id, fecha)
             )
         """)
         c.execute("""
             CREATE TABLE IF NOT EXISTS bloques (
                 id SERIAL PRIMARY KEY,
-                rutina_id INTEGER NOT NULL REFERENCES rutinas (id) ON DELETE CASCADE,
+                sesion_id INTEGER NOT NULL REFERENCES sesiones (id) ON DELETE CASCADE,
                 orden INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
                 minutos INTEGER
@@ -326,15 +349,18 @@ def youtube_valida(url: str) -> bool:
     return not url or bool(_YOUTUBE_RE.match(url.strip()))
 
 
-def obtener_rutina(jid: int):
-    """Rutina completa de un jugador (bloques + ejercicios, en orden) o None
-    si todavía no tiene una cargada."""
+def obtener_sesion(jid: int, fecha: str):
+    """Sesión de entrenamiento de un jugador para un día puntual (datos de la
+    sesión + bloques + ejercicios, en orden) o None si ese día no tiene nada
+    cargado todavía."""
     with conn() as c:
-        r = c.execute("SELECT * FROM rutinas WHERE jugador_id=%s", (jid,)).fetchone()
-        if not r:
+        s = c.execute(
+            "SELECT * FROM sesiones WHERE jugador_id=%s AND fecha=%s", (jid, fecha)
+        ).fetchone()
+        if not s:
             return None
         bloques = c.execute(
-            "SELECT * FROM bloques WHERE rutina_id=%s ORDER BY orden", (r["id"],)
+            "SELECT * FROM bloques WHERE sesion_id=%s ORDER BY orden", (s["id"],)
         ).fetchall()
         resultado = []
         for b in bloques:
@@ -350,7 +376,11 @@ def obtener_rutina(jid: int):
                     for e in ejercicios
                 ],
             })
-    return {"actualizado": r["actualizado"], "bloques": resultado}
+    return {
+        "fecha": s["fecha"], "enfoque": s["enfoque"], "rpe_final": s["rpe_final"],
+        "objetivo": s["objetivo"], "objetivo_nota": s["objetivo_nota"],
+        "bloques": resultado,
+    }
 
 
 # ===========================================================================
@@ -791,7 +821,7 @@ def admin_jugador_borrar(pin: str = Form(...), jugador_id: int = Form(...)):
         if not j:
             return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
         c.execute("DELETE FROM registros WHERE jugador_id=%s", (jugador_id,))
-        c.execute("DELETE FROM rutinas WHERE jugador_id=%s", (jugador_id,))
+        c.execute("DELETE FROM sesiones WHERE jugador_id=%s", (jugador_id,))
         c.execute("DELETE FROM jugadores WHERE id=%s", (jugador_id,))
     return {"ok": True, "nombre": j["nombre"]}
 
@@ -825,16 +855,20 @@ def rutina_editor(jid: int, request: Request):
 
 
 @app.get("/api/rutina/{jid}")
-def api_rutina_obtener(jid: int, request: Request):
+def api_rutina_obtener(jid: int, request: Request, fecha: str = ""):
     if not entrenador_logueado(request):
         return JSONResponse({"error": "No autenticado"}, status_code=403)
     with conn() as c:
         j = c.execute("SELECT nombre FROM jugadores WHERE id=%s", (jid,)).fetchone()
     if not j:
         return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
-    rutina = obtener_rutina(jid) or {"bloques": []}
-    rutina["jugador_nombre"] = j["nombre"]
-    return rutina
+    fecha = fecha or date.today().isoformat()
+    sesion = obtener_sesion(jid, fecha) or {
+        "fecha": fecha, "enfoque": "", "rpe_final": "", "objetivo": "",
+        "objetivo_nota": "", "bloques": [],
+    }
+    sesion["jugador_nombre"] = j["nombre"]
+    return sesion
 
 
 @app.post("/api/rutina/{jid}")
@@ -849,6 +883,17 @@ async def api_rutina_guardar(jid: int, request: Request):
         return JSONResponse(
             {"error": "Sesión expirada. Recargá la página e intentá de nuevo."}, status_code=403
         )
+
+    fecha = str(body.get("fecha", "")).strip()
+    try:
+        datetime.strptime(fecha, "%Y-%m-%d")
+    except ValueError:
+        return JSONResponse({"error": "Fecha inválida."}, status_code=400)
+
+    enfoque = str(body.get("enfoque", "")).strip()
+    rpe_final = str(body.get("rpe_final", "")).strip()
+    objetivo = str(body.get("objetivo", "")).strip()
+    objetivo_nota = str(body.get("objetivo_nota", "")).strip()
 
     bloques_in = body.get("bloques")
     if not isinstance(bloques_in, list):
@@ -893,18 +938,23 @@ async def api_rutina_guardar(jid: int, request: Request):
         j = c.execute("SELECT id FROM jugadores WHERE id=%s", (jid,)).fetchone()
         if not j:
             return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
-        fila_r = c.execute(
-            """INSERT INTO rutinas (jugador_id, actualizado) VALUES (%s,%s)
-               ON CONFLICT (jugador_id) DO UPDATE SET actualizado=EXCLUDED.actualizado
+        fila_s = c.execute(
+            """INSERT INTO sesiones (jugador_id, fecha, enfoque, rpe_final, objetivo, objetivo_nota, actualizado)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (jugador_id, fecha) DO UPDATE SET
+                 enfoque=EXCLUDED.enfoque, rpe_final=EXCLUDED.rpe_final,
+                 objetivo=EXCLUDED.objetivo, objetivo_nota=EXCLUDED.objetivo_nota,
+                 actualizado=EXCLUDED.actualizado
                RETURNING id""",
-            (jid, datetime.now().isoformat(timespec="seconds")),
+            (jid, fecha, enfoque, rpe_final, objetivo, objetivo_nota,
+             datetime.now().isoformat(timespec="seconds")),
         ).fetchone()
-        rutina_id = fila_r["id"]
-        c.execute("DELETE FROM bloques WHERE rutina_id=%s", (rutina_id,))
+        sesion_id = fila_s["id"]
+        c.execute("DELETE FROM bloques WHERE sesion_id=%s", (sesion_id,))
         for i, b in enumerate(bloques_limpios):
             fila_b = c.execute(
-                "INSERT INTO bloques (rutina_id, orden, nombre, minutos) VALUES (%s,%s,%s,%s) RETURNING id",
-                (rutina_id, i, b["nombre"], b["minutos"]),
+                "INSERT INTO bloques (sesion_id, orden, nombre, minutos) VALUES (%s,%s,%s,%s) RETURNING id",
+                (sesion_id, i, b["nombre"], b["minutos"]),
             ).fetchone()
             for k, e in enumerate(b["ejercicios"]):
                 c.execute(
@@ -916,12 +966,16 @@ async def api_rutina_guardar(jid: int, request: Request):
 
 
 @app.get("/mi-rutina", response_class=HTMLResponse)
-def mi_rutina(request: Request):
+def mi_rutina(request: Request, fecha: str = ""):
     j = jugador_logueado(request)
     if not j:
         return RedirectResponse("/login", status_code=303)
-    rutina = obtener_rutina(j["id"])
-    return HTMLResponse(_pagina_mi_rutina(j["nombre"], rutina))
+    try:
+        fecha_dt = datetime.strptime(fecha, "%Y-%m-%d").date() if fecha else date.today()
+    except ValueError:
+        fecha_dt = date.today()
+    sesion = obtener_sesion(j["id"], fecha_dt.isoformat())
+    return HTMLResponse(_pagina_mi_rutina(j["nombre"], fecha_dt, sesion))
 
 
 # ===========================================================================
@@ -933,8 +987,8 @@ ESTILO = """
 <link href="https://fonts.googleapis.com/css2?family=Bitter:wght@700;800;900&display=swap" rel="stylesheet">
 <style>
   :root{
-    --tinta:#141b2e; --gris:#5b6577; --linea:#e4e7ee;
-    --acento:#e8603c; --acento2:#1f6feb; --ok:#1a7f5a; --rojo:#c0402a; --ambar:#c98a00;
+    --tinta:#10173f; --gris:#5b6577; --linea:#e4e7ee;
+    --acento:#214EE0; --acento2:#1c3fc4; --ok:#1a7f5a; --rojo:#c0402a; --ambar:#c98a00;
     --fondo:#f6f7fb; --card:#fff;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -1563,7 +1617,7 @@ fetch('/api/jugador/'+jid).then(r=>{{
     '<div class="kpi"><div class="n"><span class="badge '+acls+'">'+(ac==null?'—':ac)+'</span></div><div class="l">ACWR (riesgo)</div></div>';
 
   const ult = serie.slice(-14);
-  dibujar('c_carga', ult.map(x=>({{y:x.carga}})), '#e8603c', {{tipo:'barra'}});
+  dibujar('c_carga', ult.map(x=>({{y:x.carga}})), '#214EE0', {{tipo:'barra'}});
   dibujar('c_fatiga', ult.map(x=>({{y:x.fatiga||0}})), '#c0402a', {{maxY:5}});
   dibujar('c_sueno', ult.map(x=>({{y:x.sueno||0}})), '#1f6feb', {{maxY:12}});
 
@@ -1741,15 +1795,44 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
     border-top:1px solid var(--linea);margin-top:8px}
   .msg-ok{background:#e2f4ec;color:var(--ok);padding:10px 12px;border-radius:10px;
     font-size:.86rem;margin-bottom:10px}
+  .sesion-form{background:#fff;border:1px solid var(--linea);border-radius:14px;
+    padding:16px;margin-bottom:16px}
+  .sesion-form label{display:block;font-weight:600;font-size:.82rem;margin:0 0 6px}
+  .sesion-form input{width:100%;padding:10px 12px;border:1px solid var(--linea);
+    border-radius:8px;font-size:.9rem;font-family:inherit;margin-bottom:12px}
+  .sesion-form input:disabled{background:#f6f7fb;color:var(--gris)}
+  .fila-campos{display:flex;gap:12px}
+  .fila-campos>div{flex:1}
   @media (max-width:640px){
     .fila-ejercicio,.fila-cabecera{grid-template-columns:1fr;gap:4px}
     .fila-cabecera{display:none}
+    .fila-campos{flex-direction:column;gap:0}
   }
 </style></head>
 <body><div class="wrap wide">
 <div class="nav"><a href="/jugador/{{JID}}">← Volver a la ficha</a></div>
 <header class="top"><div class="bola">🏋️</div>
-<div><h1 id="nombre">Rutina</h1><p class="sub">Bloques, minutos, actividad, dosificación y clave técnica</p></div></header>
+<div><h1 id="nombre">Rutina</h1><p class="sub">Elegí el día y cargá la sesión de ese día</p></div></header>
+<div class="sesion-form">
+  <label for="fecha">Fecha de la sesión</label>
+  <input type="date" id="fecha">
+  <div class="fila-campos">
+    <div><label for="enfoque">Enfoque de la sesión</label>
+      <input type="text" id="enfoque" placeholder="Ej: Potencia · fuerza · acondicionamiento"></div>
+  </div>
+  <div class="fila-campos">
+    <div><label for="rpeFinal">RPE final</label>
+      <input type="text" id="rpeFinal" placeholder="Ej: 7-8/10"></div>
+    <div><label for="duracionTotal">Duración total</label>
+      <input type="text" id="duracionTotal" disabled></div>
+  </div>
+  <div class="fila-campos">
+    <div><label for="objetivo">Objetivo</label>
+      <input type="text" id="objetivo" placeholder="Ej: Estímulo fuerte de cuerpo completo"></div>
+    <div><label for="objetivoNota">Nota del objetivo</label>
+      <input type="text" id="objetivoNota" placeholder="Ej: Sin llegar al fallo"></div>
+  </div>
+</div>
 <div id="mensaje"></div>
 <div id="bloques"></div>
 <button type="button" class="agregar-bloque" id="agregarBloque">+ Agregar bloque</button>
@@ -1761,13 +1844,25 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
 const jid = "{{JID}}";
 const CSRF = "{{CSRF}}";
 let rutina = {bloques: []};
+let sesionActual = {enfoque:'', rpe_final:'', objetivo:'', objetivo_nota:''};
 
 function esc(s){
   return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
     .replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+function hoyISO(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+function actualizarDuracion(){
+  const total = rutina.bloques.reduce((s,b)=> s+(b.minutos||0), 0);
+  document.getElementById('duracionTotal').value = total+' min';
+}
+
 function render(){
+  actualizarDuracion();
   const cont = document.getElementById('bloques');
   if(!rutina.bloques.length){
     cont.innerHTML = '<p class="sub">Todavía no hay bloques. Agregá el primero.</p>';
@@ -1807,7 +1902,10 @@ document.getElementById('bloques').addEventListener('input', e => {
   const b = rutina.bloques[bi];
   if(!b) return;
   if(t.classList.contains('in-bloque-nombre')) b.nombre = t.value;
-  else if(t.classList.contains('in-bloque-min')) b.minutos = t.value===''?null:parseInt(t.value,10);
+  else if(t.classList.contains('in-bloque-min')){
+    b.minutos = t.value===''?null:parseInt(t.value,10);
+    actualizarDuracion();
+  }
   else if(ei!==undefined && b.ejercicios[ei]){
     const ej = b.ejercicios[ei];
     if(t.classList.contains('in-actividad')) ej.actividad = t.value;
@@ -1837,25 +1935,39 @@ document.getElementById('agregarBloque').onclick = () => {
   render();
 };
 
+document.getElementById('fecha').value = hoyISO();
+document.getElementById('fecha').onchange = cargar;
+document.getElementById('enfoque').oninput = e => sesionActual.enfoque = e.target.value;
+document.getElementById('rpeFinal').oninput = e => sesionActual.rpe_final = e.target.value;
+document.getElementById('objetivo').oninput = e => sesionActual.objetivo = e.target.value;
+document.getElementById('objetivoNota').oninput = e => sesionActual.objetivo_nota = e.target.value;
+
 document.getElementById('guardar').onclick = () => {
   const msg = document.getElementById('mensaje');
   msg.innerHTML = '';
   fetch('/api/rutina/'+jid, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({csrf_token: CSRF, bloques: rutina.bloques}),
+    body: JSON.stringify({
+      csrf_token: CSRF,
+      fecha: document.getElementById('fecha').value,
+      enfoque: sesionActual.enfoque, rpe_final: sesionActual.rpe_final,
+      objetivo: sesionActual.objetivo, objetivo_nota: sesionActual.objetivo_nota,
+      bloques: rutina.bloques,
+    }),
   }).then(r => r.json()).then(d => {
     if(d.error){
       msg.innerHTML = '<div class="alerta">'+esc(d.error)+'</div>';
     } else {
-      msg.innerHTML = '<div class="msg-ok">Rutina guardada ✅</div>';
+      msg.innerHTML = '<div class="msg-ok">Sesión guardada ✅</div>';
       cargar();
     }
   }).catch(() => { msg.innerHTML = '<div class="alerta">No se pudo guardar. Probá de nuevo.</div>'; });
 };
 
 function cargar(){
-  fetch('/api/rutina/'+jid).then(r => {
+  const fecha = document.getElementById('fecha').value;
+  fetch('/api/rutina/'+jid+'?fecha='+fecha).then(r => {
     if(r.status===403){ location.href='/entrenador/login'; throw new Error('no autenticado'); }
     return r.json();
   }).then(d => {
@@ -1864,6 +1976,14 @@ function cargar(){
       return;
     }
     document.getElementById('nombre').textContent = 'Rutina de ' + d.jugador_nombre;
+    sesionActual = {
+      enfoque: d.enfoque||'', rpe_final: d.rpe_final||'',
+      objetivo: d.objetivo||'', objetivo_nota: d.objetivo_nota||'',
+    };
+    document.getElementById('enfoque').value = sesionActual.enfoque;
+    document.getElementById('rpeFinal').value = sesionActual.rpe_final;
+    document.getElementById('objetivo').value = sesionActual.objetivo;
+    document.getElementById('objetivoNota').value = sesionActual.objetivo_nota;
     rutina = {bloques: (d.bloques||[]).map(b => ({
       nombre: b.nombre, minutos: b.minutos,
       ejercicios: (b.ejercicios||[]).map(e => ({
@@ -1891,6 +2011,29 @@ PAGINA_MI_RUTINA_BASE = """<!doctype html>
   .bloque-head .min{font-weight:600;font-size:.85rem;opacity:.85}
   .ver-tecnica{color:var(--acento2);font-weight:700;text-decoration:none;font-size:.85rem;
     white-space:nowrap}
+  .sesion-nav{display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:14px;font-size:.85rem}
+  .sesion-nav a{color:var(--acento2);font-weight:600;text-decoration:none}
+  .sesion-nav span{color:var(--gris);font-weight:600;text-transform:capitalize}
+  .sesion-titulo{background:#dbe7fb;color:var(--tinta);text-align:center;
+    font-family:"Bitter";font-weight:800;padding:14px;border-radius:14px 14px 0 0;
+    letter-spacing:.02em}
+  .sesion-enfoque{background:var(--tinta);color:#c3d0f7;text-align:center;
+    padding:10px;font-size:.85rem;font-weight:600}
+  .sesion-info{background:#fff;border:1px solid var(--linea);border-top:0;
+    border-radius:0 0 14px 14px;margin-bottom:16px;overflow:hidden}
+  .fila-info{display:flex;border-bottom:1px solid var(--linea)}
+  .fila-info:last-child{border-bottom:0}
+  .fila-info>div{padding:10px 14px;font-weight:600;font-size:.88rem;flex:1}
+  .etiqueta{display:block;font-size:.68rem;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--gris);font-weight:700;margin-bottom:2px}
+  .nota-verde{background:#e2f4ec;color:var(--ok);display:flex;align-items:center;
+    justify-content:center;padding:10px 14px;font-weight:700;font-size:.85rem;
+    text-align:center;flex:0 0 200px}
+  @media (max-width:600px){
+    .fila-info{flex-direction:column}
+    .nota-verde{flex:none}
+  }
 </style></head>
 <body><div class="wrap wide">
 <div class="nav"><a href="/">← Volver a mi día</a></div>
@@ -1900,36 +2043,72 @@ PAGINA_MI_RUTINA_BASE = """<!doctype html>
 </div></body></html>"""
 
 
-def _pagina_mi_rutina(nombre_jugador, rutina):
-    if not rutina or not rutina["bloques"]:
-        contenido = '<p class="sub">Todavía no tenés una rutina cargada. Consultá con tu entrenador.</p>'
-    else:
-        partes = []
-        for b in rutina["bloques"]:
-            filas = []
-            for e in b["ejercicios"]:
-                if e["youtube_url"]:
-                    link = (
-                        f'<a href="{html.escape(e["youtube_url"])}" target="_blank" '
-                        f'rel="noopener noreferrer" class="ver-tecnica">▶ Ver técnica</a>'
-                    )
-                else:
-                    link = "—"
-                filas.append(
-                    "<tr><td>" + html.escape(e["actividad"]) + "</td>"
-                    "<td>" + html.escape(e["dosificacion"] or "—") + "</td>"
-                    "<td>" + html.escape(e["clave"] or "—") + "</td>"
-                    "<td>" + link + "</td></tr>"
+def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
+    fecha_ant = (fecha_dt - timedelta(days=1)).isoformat()
+    fecha_sig = (fecha_dt + timedelta(days=1)).isoformat()
+    fecha_larga = fecha_dt.strftime("%A %d de %B")
+    nav = (
+        '<div class="sesion-nav">'
+        f'<a href="/mi-rutina?fecha={fecha_ant}">‹ Día anterior</a>'
+        f'<span>{html.escape(fecha_larga)}</span>'
+        f'<a href="/mi-rutina?fecha={fecha_sig}">Día siguiente ›</a>'
+        "</div>"
+    )
+
+    if not sesion or not sesion["bloques"]:
+        contenido = nav + '<p class="sub">Todavía no tenés una sesión cargada para este día. Consultá con tu entrenador.</p>'
+        return PAGINA_MI_RUTINA_BASE.replace("{{NOMBRE}}", html.escape(nombre_jugador)).replace(
+            "{{CONTENIDO}}", contenido
+        )
+
+    duracion_total = sum((b["minutos"] or 0) for b in sesion["bloques"])
+    primer_nombre = nombre_jugador.split(" ")[0].upper()
+    titulo = f'SESIÓN {fecha_dt.strftime("%d-%m")} — {html.escape(primer_nombre)}'
+    cabecera = f'<div class="sesion-titulo">{titulo}</div>'
+    if sesion["enfoque"]:
+        cabecera += f'<div class="sesion-enfoque">{html.escape(sesion["enfoque"])}</div>'
+
+    fila1 = (
+        f'<div><span class="etiqueta">Deportista</span>{html.escape(nombre_jugador)}</div>'
+        f'<div><span class="etiqueta">Duración</span>{duracion_total} min</div>'
+    )
+    if sesion["rpe_final"]:
+        fila1 += f'<div class="nota-verde">RPE final: {html.escape(sesion["rpe_final"])}</div>'
+    info = f'<div class="fila-info">{fila1}</div>'
+    if sesion["objetivo"]:
+        fila2 = f'<div><span class="etiqueta">Objetivo</span>{html.escape(sesion["objetivo"])}</div>'
+        if sesion["objetivo_nota"]:
+            fila2 += f'<div class="nota-verde">{html.escape(sesion["objetivo_nota"])}</div>'
+        info += f'<div class="fila-info">{fila2}</div>'
+    cabecera += f'<div class="sesion-info">{info}</div>'
+
+    partes = []
+    for b in sesion["bloques"]:
+        filas = []
+        for e in b["ejercicios"]:
+            if e["youtube_url"]:
+                link = (
+                    f'<a href="{html.escape(e["youtube_url"])}" target="_blank" '
+                    f'rel="noopener noreferrer" class="ver-tecnica">▶ Ver técnica</a>'
                 )
-            minutos = f'{b["minutos"]} min' if b["minutos"] else ""
-            partes.append(
-                '<div class="bloque"><div class="bloque-head"><span>'
-                + html.escape(b["nombre"]) + '</span><span class="min">' + minutos + "</span></div>"
-                '<div class="tabla-wrap" style="border:0;border-radius:0"><table>'
-                "<thead><tr><th>Actividad</th><th>Dosificación</th><th>Clave</th><th>Técnica</th></tr></thead>"
-                "<tbody>" + "".join(filas) + "</tbody></table></div></div>"
+            else:
+                link = "—"
+            filas.append(
+                "<tr><td>" + html.escape(e["actividad"]) + "</td>"
+                "<td>" + html.escape(e["dosificacion"] or "—") + "</td>"
+                "<td>" + html.escape(e["clave"] or "—") + "</td>"
+                "<td>" + link + "</td></tr>"
             )
-        contenido = "".join(partes)
+        minutos = f'{b["minutos"]} min' if b["minutos"] else ""
+        partes.append(
+            '<div class="bloque"><div class="bloque-head"><span>'
+            + html.escape(b["nombre"]) + '</span><span class="min">' + minutos + "</span></div>"
+            '<div class="tabla-wrap" style="border:0;border-radius:0"><table>'
+            "<thead><tr><th>Actividad</th><th>Dosificación</th><th>Clave</th><th>Técnica</th></tr></thead>"
+            "<tbody>" + "".join(filas) + "</tbody></table></div></div>"
+        )
+
+    contenido = nav + cabecera + "".join(partes)
     return PAGINA_MI_RUTINA_BASE.replace("{{NOMBRE}}", html.escape(nombre_jugador)).replace(
         "{{CONTENIDO}}", contenido
     )
