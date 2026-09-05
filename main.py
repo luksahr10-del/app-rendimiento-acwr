@@ -778,6 +778,24 @@ def admin_resetear_clave(pin: str = Form(...), jugador_id: int = Form(...)):
     return {"ok": True, "nombre": fila["nombre"], "clave_nueva": clave_nueva}
 
 
+@app.post("/admin/jugador/borrar")
+def admin_jugador_borrar(pin: str = Form(...), jugador_id: int = Form(...)):
+    """Borra un jugador y todo su historial (registros, rutina). Es
+    irreversible: pensado para sacar cuentas de prueba o dadas de alta por
+    error, no para bajas normales (para eso está 'Dar de baja', que no
+    borra nada)."""
+    if pin != PIN_ENTRENADOR:
+        return JSONResponse({"error": "PIN inválido"}, status_code=403)
+    with conn() as c:
+        j = c.execute("SELECT nombre FROM jugadores WHERE id=%s", (jugador_id,)).fetchone()
+        if not j:
+            return JSONResponse({"error": "No existe ese jugador"}, status_code=404)
+        c.execute("DELETE FROM registros WHERE jugador_id=%s", (jugador_id,))
+        c.execute("DELETE FROM rutinas WHERE jugador_id=%s", (jugador_id,))
+        c.execute("DELETE FROM jugadores WHERE id=%s", (jugador_id,))
+    return {"ok": True, "nombre": j["nombre"]}
+
+
 @app.post("/admin/entrenador/borrar")
 def admin_entrenador_borrar(pin: str = Form(...), email: str = Form(...)):
     """Borra una cuenta de entrenador (ej: una cuenta de prueba, o alguien que
@@ -1577,7 +1595,7 @@ PAGINA_ADMIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
   <p class="ayuda" id="msg"></p>
 </div>
 <div class="tabla-wrap"><table id="tabla">
-<thead><tr><th>Nombre</th><th>Posición</th><th>Estado</th><th></th><th></th></tr></thead>
+<thead><tr><th>Nombre</th><th>Posición</th><th>Estado</th><th></th><th></th><th></th></tr></thead>
 <tbody></tbody></table></div>
 </div>
 <script>
@@ -1601,7 +1619,9 @@ function cargar(){{
       const btnClave = j.email
         ? '<button class="btn" onclick="resetearClave('+j.id+',\\''+nombreEsc+'\\')">Resetear clave</button>'
         : '<span class="sub">sin cuenta</span>';
-      tr.innerHTML='<td><b>'+j.nombre+'</b></td><td>'+(j.posicion||'—')+'</td><td>'+estado+'</td><td>'+btn+'</td><td>'+btnClave+'</td>';
+      const btnBorrar = '<button class="btn" style="color:var(--rojo);border-color:var(--rojo)" '+
+        'onclick="borrar('+j.id+',\\''+nombreEsc+'\\')">Borrar</button>';
+      tr.innerHTML='<td><b>'+j.nombre+'</b></td><td>'+(j.posicion||'—')+'</td><td>'+estado+'</td><td>'+btn+'</td><td>'+btnClave+'</td><td>'+btnBorrar+'</td>';
       tb.appendChild(tr);
     }});
   }});
@@ -1609,6 +1629,15 @@ function cargar(){{
 function estado(id,activo){{
   const fd=new FormData(); fd.append('pin',pin); fd.append('jugador_id',id); fd.append('activo',activo);
   fetch('/admin/estado',{{method:'POST',body:fd}}).then(()=>cargar());
+}}
+function borrar(id,nombre){{
+  if(!confirm('¿BORRAR a '+nombre+' para siempre? Se pierde todo su historial de cargas y su rutina, '+
+    'no se puede deshacer.\\n\\nSi solo querés que no pueda ingresar, usá "Dar de baja" en cambio.')) return;
+  const fd=new FormData(); fd.append('pin',pin); fd.append('jugador_id',id);
+  fetch('/admin/jugador/borrar',{{method:'POST',body:fd}}).then(r=>r.json()).then(res=>{{
+    if(res.error){{ alert('Error: '+res.error); return; }}
+    cargar();
+  }});
 }}
 function resetearClave(id,nombre){{
   if(!confirm('¿Resetear la clave de '+nombre+'? La contraseña anterior deja de funcionar.')) return;
