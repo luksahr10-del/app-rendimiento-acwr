@@ -698,6 +698,9 @@ def admin_resetear_clave(pin: str = Form(...), jugador_id: int = Form(...)):
 #  ESTILO COMPARTIDO
 # ===========================================================================
 ESTILO = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@700;800;900&display=swap" rel="stylesheet">
 <style>
   :root{
     --tinta:#141b2e; --gris:#5b6577; --linea:#e4e7ee;
@@ -713,7 +716,7 @@ ESTILO = """
   header.top{display:flex;align-items:center;gap:10px;margin-bottom:18px}
   .bola{width:34px;height:34px;border-radius:50%;background:var(--acento);
         display:grid;place-items:center;color:#fff;font-weight:800;flex:none}
-  h1{font-size:1.25rem;margin:0}
+  h1{font-family:"Bitter";font-weight:800;font-size:1.25rem;margin:0}
   .sub{color:var(--gris);font-size:.86rem;margin:2px 0 0}
   .card{background:var(--card);border:1px solid var(--linea);border-radius:16px;
         padding:16px;margin-bottom:14px}
@@ -746,7 +749,7 @@ ESTILO = """
   .b-ambar{background:#fdf1d8;color:var(--ambar)} .b-gris{background:#eef0f5;color:var(--gris)}
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
   .kpi{background:#fff;border:1px solid var(--linea);border-radius:14px;padding:14px}
-  .kpi .n{font-size:1.8rem;font-weight:800} .kpi .l{color:var(--gris);font-size:.8rem}
+  .kpi .n{font-family:"Bitter";font-size:1.8rem;font-weight:800} .kpi .l{color:var(--gris);font-size:.8rem}
   .btn{display:inline-block;padding:9px 14px;border-radius:10px;border:1px solid var(--linea);
        background:#fff;font-weight:600;cursor:pointer;font-size:.85rem}
   .btn-p{background:var(--tinta);color:#fff;border-color:var(--tinta)}
@@ -766,10 +769,10 @@ ESTILO = """
 PAGINA_JUGADOR = """<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Mi día</title>
+<title>Corey Strength · Mi día</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Saira:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600;700;800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
     --azul:#214EE0; --azul-800:#1A3EB0; --azul-050:#EDF1FE;
@@ -785,12 +788,12 @@ PAGINA_JUGADOR = """<!doctype html>
   .escudo{width:44px;height:44px;border-radius:11px;flex:none;background:rgba(255,255,255,.14);
     display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.25)}
   .escudo img{width:100%;height:100%;object-fit:contain}
-  .escudo .mono{font-family:"Saira";font-weight:800;font-size:24px;color:#fff}
-  .wordmark{font-family:"Saira";font-weight:800;font-size:21px;letter-spacing:.02em;line-height:1;white-space:nowrap}
+  .escudo .mono{font-family:"Bitter";font-weight:800;font-size:24px;color:#fff}
+  .wordmark{font-family:"Bitter";font-weight:800;font-size:21px;letter-spacing:.02em;line-height:1;white-space:nowrap}
   .wordmark small{display:block;font-weight:500;font-size:11px;letter-spacing:.18em;opacity:.7;margin-top:3px}
   .salir{margin-left:auto;color:#fff;opacity:.85;font-size:.78rem;font-weight:600;text-decoration:none;
     border:1px solid rgba(255,255,255,.4);border-radius:20px;padding:6px 12px;flex:none}
-  .hero h1{font-family:"Saira";font-weight:700;font-size:34px;line-height:1;margin:20px 0 4px}
+  .hero h1{font-family:"Bitter";font-weight:700;font-size:34px;line-height:1;margin:20px 0 4px}
   .hero .fecha{font-size:13px;opacity:.85;margin:0 0 20px;text-transform:capitalize}
   .cancha{height:26px;border-top:2px solid rgba(255,255,255,.35);position:relative;margin:0 -20px}
   .cancha::before{content:"";position:absolute;top:-14px;left:50%;transform:translateX(-50%);
@@ -805,7 +808,7 @@ PAGINA_JUGADOR = """<!doctype html>
   textarea{min-height:64px;resize:vertical}
   .par{display:flex;gap:12px}.par>div{flex:1}
   .sep{height:1px;background:var(--linea);margin:22px 0}
-  .titulo-sec{font-family:"Saira";font-weight:700;font-size:1.05rem;margin:0 0 12px}
+  .titulo-sec{font-family:"Bitter";font-weight:700;font-size:1.05rem;margin:0 0 12px}
   .toggle{display:flex;gap:8px}
   .toggle input{position:absolute;opacity:0;pointer-events:none}
   .toggle label{flex:1;text-align:center;padding:12px;border:1.5px solid var(--linea);border-radius:12px;
@@ -817,7 +820,7 @@ PAGINA_JUGADOR = """<!doctype html>
   .chips input{position:absolute;opacity:0;pointer-events:none}
   .chips label{aspect-ratio:1/1;display:grid;place-items:center;cursor:pointer;
     border:1.5px solid var(--linea);border-radius:12px;background:#fff;
-    font-family:"Saira";font-weight:700;font-size:1.15rem;color:var(--negro);
+    font-family:"Bitter";font-weight:700;font-size:1.15rem;color:var(--negro);
     transition:transform .08s, background .12s, border-color .12s}
   .chips label:active{transform:scale(.94)}
   .chips input:checked + label{background:var(--azul);border-color:var(--azul);color:#fff;
@@ -828,7 +831,7 @@ PAGINA_JUGADOR = """<!doctype html>
     padding:14px 20px calc(14px + env(safe-area-inset-bottom));
     background:linear-gradient(to top, #fff 70%, rgba(255,255,255,0))}
   .guardar{width:100%;padding:16px;border:0;border-radius:14px;background:var(--azul);color:#fff;
-    font-family:"Saira";font-weight:700;font-size:1.1rem;cursor:pointer;
+    font-family:"Bitter";font-weight:700;font-size:1.1rem;cursor:pointer;
     transition:transform .08s, background .12s;box-shadow:0 6px 18px rgba(33,78,224,.35)}
   .guardar:hover{background:var(--azul-800)}
   .guardar:active{transform:scale(.99)}
@@ -838,10 +841,10 @@ PAGINA_JUGADOR = """<!doctype html>
   <header class="hero">
     <div class="marca">
       <div class="escudo">
-        <img src="/static/escudo.png" alt="Escudo Río Corey" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+        <img src="/static/escudo.png" alt="Escudo Corey Strength" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
         <span class="mono" style="display:none">C</span>
       </div>
-      <div class="wordmark">RÍO COREY<small>RENDIMIENTO</small></div>
+      <div class="wordmark">COREY STRENGTH<small>RENDIMIENTO</small></div>
       <a href="/logout" class="salir">Salir</a>
     </div>
     <h1>Hola, {{NOMBRE}}</h1>
@@ -930,10 +933,10 @@ PAGINA_JUGADOR = """<!doctype html>
 PAGINA_OK = """<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Guardado</title>
+<title>Corey Strength · Guardado</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Saira:wght@600;700;800&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700;800;900&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0}
   body{font-family:"Inter",system-ui,sans-serif;background:#214EE0;color:#fff;
@@ -941,10 +944,10 @@ PAGINA_OK = """<!doctype html>
     text-align:center;padding:40px;-webkit-font-smoothing:antialiased}
   .tic{width:80px;height:80px;border-radius:50%;background:#fff;color:#214EE0;font-size:42px;
     display:grid;place-items:center;margin-bottom:20px}
-  h2{font-family:"Saira";font-weight:800;font-size:2rem;margin-bottom:8px}
-  .disp{font-family:"Saira";font-weight:700;font-size:1.1rem;opacity:.95;margin-bottom:28px}
+  h2{font-family:"Bitter";font-weight:800;font-size:2rem;margin-bottom:8px}
+  .disp{font-family:"Bitter";font-weight:700;font-size:1.1rem;opacity:.95;margin-bottom:28px}
   a{background:#fff;color:#214EE0;text-decoration:none;padding:14px 28px;border-radius:12px;
-    font-family:"Saira";font-weight:700;font-size:1rem}
+    font-family:"Bitter";font-weight:700;font-size:1rem}
 </style></head>
 <body>
   <div class="tic">✓</div>
@@ -960,14 +963,14 @@ _ESTILO_CUENTA = """
     display:flex;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased}
   .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:100%;
     box-shadow:0 20px 50px rgba(17,19,24,.25)}
-  h1{font-family:"Saira";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
+  h1{font-family:"Bitter";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
   p.sub{color:#6B7280;font-size:.9rem;margin:0 0 22px}
   label{display:block;font-weight:600;font-size:.88rem;margin:14px 0 6px;color:#111318}
   input{width:100%;padding:12px;border:1.5px solid #E6E8EE;border-radius:10px;font-size:1rem;font-family:inherit}
   input:focus{outline:none;border-color:#214EE0;box-shadow:0 0 0 4px #EDF1FE}
   .par{display:flex;gap:10px}.par>div{flex:1}
   button{width:100%;padding:14px;border:0;border-radius:12px;background:#214EE0;color:#fff;
-    font-family:"Saira";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
+    font-family:"Bitter";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
   .error{background:#fde8e2;color:#c0402a;padding:10px 12px;border-radius:10px;font-size:.85rem;margin:0 0 8px}
   .alt{text-align:center;margin-top:18px;font-size:.88rem;color:#6B7280}
   .alt a{color:#214EE0;font-weight:600;text-decoration:none}
@@ -986,20 +989,20 @@ _ESTILO_CUENTA_JUGADOR = """
     padding:24px;-webkit-font-smoothing:antialiased}
   .volver{align-self:flex-start;color:#aab4e8;text-decoration:none;font-size:.85rem;
     font-weight:600;margin:0 0 18px 4px}
-  .marca{font-family:"Saira";font-weight:800;font-size:1.35rem;letter-spacing:.03em;color:#fff;
+  .marca{font-family:"Bitter";font-weight:800;font-size:1.35rem;letter-spacing:.03em;color:#fff;
     text-align:center;margin:0 0 22px}
   .marca small{display:block;font-weight:600;font-size:.68rem;letter-spacing:.2em;color:#9aa6e8;
     text-transform:uppercase;margin-top:5px}
   .card{background:#fff;border-radius:20px;padding:32px 26px;max-width:380px;width:100%;
     box-shadow:0 20px 50px rgba(5,8,31,.5)}
-  h1{font-family:"Saira";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
+  h1{font-family:"Bitter";font-weight:800;font-size:1.6rem;margin:0 0 4px;color:#111318}
   p.sub{color:#6B7280;font-size:.9rem;margin:0 0 22px}
   label{display:block;font-weight:600;font-size:.88rem;margin:14px 0 6px;color:#111318}
   input{width:100%;padding:12px;border:1.5px solid #E6E8EE;border-radius:10px;font-size:1rem;font-family:inherit}
   input:focus{outline:none;border-color:#214EE0;box-shadow:0 0 0 4px #EDF1FE}
   .par{display:flex;gap:10px}.par>div{flex:1}
   button{width:100%;padding:14px;border:0;border-radius:12px;background:#214EE0;color:#fff;
-    font-family:"Saira";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
+    font-family:"Bitter";font-weight:700;font-size:1.02rem;margin-top:20px;cursor:pointer}
   .error{background:#fde8e2;color:#c0402a;padding:10px 12px;border-radius:10px;font-size:.85rem;margin:0 0 8px}
   .alt{text-align:center;margin-top:18px;font-size:.88rem;color:#6B7280}
   .alt a{color:#214EE0;font-weight:600;text-decoration:none}
@@ -1008,7 +1011,7 @@ _ESTILO_CUENTA_JUGADOR = """
 _HEAD_FUENTES = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Saira:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">"""
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@700;800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">"""
 
 _ICONO_LAPIZ = ('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
                 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -1036,7 +1039,7 @@ def bloque_hero(activo=None):
     `activo` es None (bienvenida), "login" o "registro" (esa página)."""
     return f"""
   <div class="hero">
-    <img src="/static/fondo-riocorey.png" alt="Río Corey — Club de básquetbol. Vive el juego.">
+    <img src="/static/fondo-riocorey.png" alt="Corey Strength — Live the game.">
   </div>
   <div class="botones">
     {_boton_cuenta("/registro", _ICONO_LAPIZ, "Regístrate", activo == "registro")}
@@ -1052,10 +1055,10 @@ def bloque_hero(activo=None):
 PAGINA_LOGIN = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
+<title>Corey Strength · Ingresar</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <a href="/" class="volver">‹ Volver</a>
-  <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
+  <div class="marca">COREY STRENGTH<small>Club de básquetbol</small></div>
   <div class="card">
     <h1>Bienvenido de vuelta</h1>
     <p class="sub">Ingresa para cargar tu día</p>
@@ -1075,10 +1078,10 @@ PAGINA_LOGIN = f"""<!doctype html>
 PAGINA_REGISTRO = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
+<title>Corey Strength · Crear cuenta</title>{_HEAD_FUENTES}{_ESTILO_CUENTA_JUGADOR}</head>
 <body>
   <a href="/" class="volver">‹ Volver</a>
-  <div class="marca">RÍO COREY<small>Club de básquetbol</small></div>
+  <div class="marca">COREY STRENGTH<small>Club de básquetbol</small></div>
   <div class="card">
     <h1>Crea tu cuenta</h1>
     <p class="sub">Para registrar tu día a día</p>
@@ -1110,7 +1113,7 @@ PAGINA_REGISTRO = f"""<!doctype html>
 PAGINA_BIENVENIDA = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey</title>{_HEAD_FUENTES}
+<title>Corey Strength</title>{_HEAD_FUENTES}
 <style>
   *{{box-sizing:border-box}}
   html,body{{margin:0}}
@@ -1123,7 +1126,7 @@ PAGINA_BIENVENIDA = f"""<!doctype html>
     padding:0 28px;display:flex;flex-direction:column;gap:14px}}
   .btn{{display:flex;align-items:center;width:100%;padding:15px 22px;border-radius:999px;
     background:linear-gradient(135deg,#4266e0,#1c3fc4);color:#fff;text-decoration:none;
-    font-family:"Saira";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
+    font-family:"Bitter";font-weight:700;font-size:1.05rem;box-shadow:0 10px 24px rgba(28,63,196,.45);
     border:1px solid rgba(255,255,255,.15)}}
   .btn .icono{{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.18);
     display:grid;place-items:center;flex:none}}
@@ -1147,7 +1150,7 @@ PAGINA_PIN = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Corey Strength · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
 <body>
   <div class="card">
     <h1>Panel del cuerpo técnico</h1>
@@ -1168,7 +1171,7 @@ PAGINA_ENTRENADOR_LOGIN = f"""<!doctype html>
 PAGINA_ENTRENADOR_REGISTRO = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Río Corey · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
+<title>Corey Strength · Cuerpo técnico</title>{_HEAD_FUENTES}{_ESTILO_CUENTA}</head>
 <body>
   <div class="card">
     <h1>Crear cuenta de entrenador</h1>
