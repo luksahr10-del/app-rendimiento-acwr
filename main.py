@@ -1788,6 +1788,7 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
     gap:8px;margin-bottom:8px;align-items:center}
   .fila-ejercicio input{padding:9px 10px;border:1px solid var(--linea);border-radius:8px;
     font-size:.88rem;font-family:inherit;width:100%}
+  .etiqueta-movil{display:none}
   .fila-cabecera{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr auto;
     gap:8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;
     color:var(--gris);margin-bottom:6px}
@@ -1816,6 +1817,8 @@ PAGINA_RUTINA_EDITAR = """<!doctype html>
     .fila-ejercicio,.fila-cabecera{grid-template-columns:1fr;gap:4px}
     .fila-cabecera{display:none}
     .fila-campos{flex-direction:column;gap:0}
+    .etiqueta-movil{display:block;font-size:.68rem;text-transform:uppercase;
+      letter-spacing:.03em;color:var(--gris);font-weight:700;margin:6px 0 2px}
   }
 </style></head>
 <body><div class="wrap wide">
@@ -1885,14 +1888,14 @@ function render(){
       </div>
       ${b.ejercicios.map((e, ei) => `
         <div class="fila-ejercicio">
-          <input type="text" placeholder="Actividad" value="${esc(e.actividad)}"
-            data-b="${bi}" data-e="${ei}" class="in-actividad">
-          <input type="text" placeholder="Ej: 3 × 10" value="${esc(e.dosificacion)}"
-            data-b="${bi}" data-e="${ei}" class="in-dosificacion">
-          <input type="text" placeholder="Clave técnica" value="${esc(e.clave)}"
-            data-b="${bi}" data-e="${ei}" class="in-clave">
-          <input type="url" placeholder="https://youtube.com/..." value="${esc(e.youtube_url)}"
-            data-b="${bi}" data-e="${ei}" class="in-youtube">
+          <div class="campo-ej"><span class="etiqueta-movil">Actividad</span><input type="text" placeholder="Actividad" value="${esc(e.actividad)}"
+            data-b="${bi}" data-e="${ei}" class="in-actividad"></div>
+          <div class="campo-ej"><span class="etiqueta-movil">Dosificación</span><input type="text" placeholder="Ej: 3 × 10" value="${esc(e.dosificacion)}"
+            data-b="${bi}" data-e="${ei}" class="in-dosificacion"></div>
+          <div class="campo-ej"><span class="etiqueta-movil">Clave</span><input type="text" placeholder="Clave técnica" value="${esc(e.clave)}"
+            data-b="${bi}" data-e="${ei}" class="in-clave"></div>
+          <div class="campo-ej"><span class="etiqueta-movil">Link de YouTube (técnica)</span><input type="url" placeholder="https://youtube.com/..." value="${esc(e.youtube_url)}"
+            data-b="${bi}" data-e="${ei}" class="in-youtube"></div>
           <button type="button" class="quitar" data-b="${bi}" data-e="${ei}" title="Quitar ejercicio">✕</button>
         </div>`).join('')}
       <button type="button" class="agregar-ejercicio" data-b="${bi}">+ Agregar ejercicio</button>
