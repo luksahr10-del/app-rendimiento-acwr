@@ -2014,7 +2014,7 @@ PAGINA_MI_RUTINA_BASE = """<!doctype html>
   .sesion-nav{display:flex;justify-content:space-between;align-items:center;
     margin-bottom:14px;font-size:.85rem}
   .sesion-nav a{color:var(--acento2);font-weight:600;text-decoration:none}
-  .sesion-nav span{color:var(--gris);font-weight:600;text-transform:capitalize}
+  .sesion-nav span{color:var(--gris);font-weight:600}
   .sesion-titulo{background:#dbe7fb;color:var(--tinta);text-align:center;
     font-family:"Bitter";font-weight:800;padding:14px;border-radius:14px 14px 0 0;
     letter-spacing:.02em}
@@ -2049,9 +2049,10 @@ _MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "ag
 
 
 def _fecha_larga_es(d) -> str:
-    """'sábado 05 de septiembre', sin depender del locale del servidor
+    """'Sábado 05 de septiembre', sin depender del locale del servidor
     (Render no tiene configurado es_AR, así que strftime da nombres en inglés)."""
-    return f"{_DIAS_ES[d.weekday()]} {d.day:02d} de {_MESES_ES[d.month - 1]}"
+    texto = f"{_DIAS_ES[d.weekday()]} {d.day:02d} de {_MESES_ES[d.month - 1]}"
+    return texto[0].upper() + texto[1:]
 
 
 def _pagina_mi_rutina(nombre_jugador, fecha_dt, sesion):
